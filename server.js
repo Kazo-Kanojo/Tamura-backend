@@ -72,11 +72,13 @@ const upload = multer({ storage, fileFilter });
 // Middlewares
 app.use(helmet());
 app.use(helmet.crossOriginResourcePolicy({ policy: "cross-origin" })); 
+app.use(cors()); 
+
+// OU
+
+// Opção B (Mais segura - Troque pelo seu link REAL da Vercel)
 app.use(cors({
-    origin: [
-        'http://localhost:5173', // Para funcionarem os testes locais
-        'https://tamura-frontend.vercel.app/' // A URL que a Vercel gerou (COLOCA A TUA AQUI)
-    ],
+    origin: ['https://tamura-eventos.vercel.app', 'http://localhost:5173'],
     credentials: true
 }));
 app.use(bodyParser.json());
