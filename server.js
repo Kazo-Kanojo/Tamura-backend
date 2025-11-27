@@ -72,7 +72,13 @@ const upload = multer({ storage, fileFilter });
 // Middlewares
 app.use(helmet());
 app.use(helmet.crossOriginResourcePolicy({ policy: "cross-origin" })); 
-app.use(cors());
+app.use(cors({
+    origin: [
+        'http://localhost:5173', // Para funcionarem os testes locais
+        'https://tamura-frontend.vercel.app/' // A URL que a Vercel gerou (COLOCA A TUA AQUI)
+    ],
+    credentials: true
+}));
 app.use(bodyParser.json());
 app.use('/uploads', express.static('uploads')); 
 
