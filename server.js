@@ -53,7 +53,7 @@ const sendEmail = async (to, subject, text) => {
 // Segurança
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 5,
+  max: 15,
   message: { error: "Muitas tentativas. Bloqueado por 15 min." },
   standardHeaders: true, legacyHeaders: false,
 });
