@@ -410,6 +410,15 @@ app.post('/api/stages/:id/upload/:category', authenticateToken, upload.single('f
   } catch (error) { console.error(error); res.status(500).json({ error: "Erro." }); }
 });
 app.get('/api/standings/overall', (req, res) => { db.all(`SELECT pilot_name, pilot_number, category, SUM(points) as total_points FROM results GROUP BY pilot_number, category ORDER BY category ASC, total_points DESC`, [], (err, rows) => { if (err) return res.status(500).json({ error: err.message }); res.json(rows); }); });
-app.get('/api/stages/:id/standings', (req, res) => { db.all(`SELECT pilot_name, pilot_number, category, points as total_points FROM results WHERE stage_id = ? ORDER BY category ASC, points DESC`, [req.params.id], (err, rows) => { if (err) return res.status(500).json({ error: err.message }); res.json(rows); }); });
+
+// *** ROTA CORRIGIDA PARA TRAZER DADOS COMPLETOS E ORDENAR POR POSIÇÃO ***
+app.get('/api/stages/:id/standings', (req, res) => { 
+    // USA SELECT * PARA PEGAR TUDO (Voltas, Tempo, Diff, Melhor Volta)
+    // E ORDENA PELA POSIÇÃO DE CHEGADA (position ASC)
+    db.all(`SELECT * FROM results WHERE stage_id = ? ORDER BY category ASC, position ASC`, [req.params.id], (err, rows) => { 
+        if (err) return res.status(500).json({ error: err.message }); 
+        res.json(rows); 
+    }); 
+});
 
 app.listen(port, () => { console.log(`Server running at http://localhost:${port}`); });
