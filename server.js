@@ -1,6 +1,6 @@
 require('dotenv').config();
 const express = require('express');
-const { Pool } = require('pg'); // Alterado de sqlite3 para pg
+const { Pool } = require('pg');
 const cors = require('cors');
 const bodyParser = require('body-parser');
 const multer = require('multer');
@@ -19,10 +19,9 @@ const app = express();
 const port = process.env.PORT || 3000;
 
 // =====================================================
-// 1. CONFIGURAÇÕES (EMAIL, UPLOAD, SEGURANÇA)
+// 1. CONFIGURAÇÕES
 // =====================================================
 
-// Correção IPv6 para E-mail
 const customLookup = (hostname, options, callback) => {
     dns.lookup(hostname, { family: 4 }, (err, address, family) => {
         if (err) return callback(err);
@@ -50,7 +49,6 @@ const sendEmail = async (to, subject, text) => {
   }
 };
 
-// Segurança
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 15,
@@ -58,7 +56,6 @@ const loginLimiter = rateLimit({
   standardHeaders: true, legacyHeaders: false,
 });
 
-// Upload
 const storage = multer.diskStorage({
   destination: (req, file, cb) => { if (!fs.existsSync('uploads')) fs.mkdirSync('uploads'); cb(null, 'uploads/'); },
   filename: (req, file, cb) => { const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9); cb(null, uniqueSuffix + path.extname(file.originalname)); }
@@ -69,10 +66,9 @@ const fileFilter = (req, file, cb) => {
 };
 const upload = multer({ storage, fileFilter });
 
-// Middlewares
 app.use(helmet());
 app.use(helmet.crossOriginResourcePolicy({ policy: "cross-origin" })); 
-app.use(cors()); // Configure a origem específica em produção se necessário
+app.use(cors()); 
 app.use(bodyParser.json());
 app.use('/uploads', express.static('uploads')); 
 
@@ -97,10 +93,9 @@ const pool = new Pool({
   database: process.env.PG_DATABASE,
   password: process.env.PG_PASSWORD,
   port: process.env.PG_PORT || 5432,
-  ssl: process.env.PG_SSL === 'true' ? { rejectUnauthorized: false } : false // Necessário para Render/Supabase
+  ssl: process.env.PG_SSL === 'true' ? { rejectUnauthorized: false } : false
 });
 
-// Helper para queries simples
 const query = (text, params) => pool.query(text, params);
 
 const DEFAULT_PLANS = [
@@ -113,15 +108,13 @@ const DEFAULT_PLANS = [
   { id: 'full',       name: 'Full Pass',     price: 230, limit_cat: 99, allowed: null, description: 'Acesso total a todas as categorias' },
 ];
 
-// Inicialização do Banco de Dados
 const initDb = async () => {
   try {
     console.log("Conectando ao PostgreSQL...");
-    // Configurações Globais
+    
     await query(`CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)`);
     await query(`INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO NOTHING`, ['pix_key', '']);
 
-    // Usuários (SERIAL substitui AUTOINCREMENT)
     await query(`CREATE TABLE IF NOT EXISTS users (
       id SERIAL PRIMARY KEY, 
       name TEXT, 
@@ -132,11 +125,11 @@ const initDb = async () => {
       chip_id TEXT, 
       password TEXT, 
       role TEXT DEFAULT 'user', 
+      birth_date DATE,
       reset_token TEXT, 
       reset_expires TIMESTAMP
     )`);
 
-    // Etapas (Stages)
     await query(`CREATE TABLE IF NOT EXISTS stages (
       id SERIAL PRIMARY KEY, 
       name TEXT, 
@@ -147,7 +140,6 @@ const initDb = async () => {
       batch_name TEXT DEFAULT 'Lote Inicial'
     )`);
 
-    // Planos Base
     await query(`CREATE TABLE IF NOT EXISTS plans (
       id TEXT PRIMARY KEY, 
       name TEXT, 
@@ -157,7 +149,6 @@ const initDb = async () => {
       description TEXT
     )`);
 
-    // Inicializa Planos Padrão
     const plansCount = await query("SELECT count(*) as count FROM plans");
     if (parseInt(plansCount.rows[0].count) === 0) {
       for (const plan of DEFAULT_PLANS) {
@@ -168,7 +159,6 @@ const initDb = async () => {
       }
     }
 
-    // Preços por Etapa
     await query(`CREATE TABLE IF NOT EXISTS stage_prices (
         stage_id INTEGER,
         plan_id TEXT,
@@ -178,7 +168,6 @@ const initDb = async () => {
         FOREIGN KEY(plan_id) REFERENCES plans(id)
     )`);
 
-    // Resultados
     await query(`CREATE TABLE IF NOT EXISTS results (
       id SERIAL PRIMARY KEY, 
       stage_id INTEGER, 
@@ -198,7 +187,6 @@ const initDb = async () => {
       FOREIGN KEY(stage_id) REFERENCES stages(id) ON DELETE CASCADE
     )`);
 
-    // Inscrições
     await query(`CREATE TABLE IF NOT EXISTS registrations (
       id SERIAL PRIMARY KEY, 
       user_id INTEGER, 
@@ -214,7 +202,6 @@ const initDb = async () => {
       FOREIGN KEY(stage_id) REFERENCES stages(id) ON DELETE CASCADE
     )`);
 
-    // Admin Padrão
     const adminEmail = '10tamura@gmail.com'; 
     const rawPass = '1234';
     const adminUser = await query("SELECT * FROM users WHERE email = $1", [adminEmail]);
@@ -234,7 +221,6 @@ const initDb = async () => {
   }
 };
 
-// Executa a inicialização
 initDb();
 
 const getPointsByPosition = (position) => {
@@ -246,13 +232,11 @@ const getPointsByPosition = (position) => {
 // ROTAS API
 // =====================================================
 
-// --- BACKUP (DESATIVADO NO POSTGRES - Use pg_dump no servidor) ---
 app.get('/api/admin/backup', authenticateToken, (req, res) => {
     if (req.user.role !== 'admin') return res.status(403).json({ error: "Acesso negado." });
     res.status(501).json({ error: "Backup via arquivo não suportado no PostgreSQL. Utilize pg_dump." });
 });
 
-// --- SETTINGS ---
 app.get('/api/settings/:key', async (req, res) => {
     try {
         const result = await query("SELECT value FROM settings WHERE key = $1", [req.params.key]);
@@ -270,21 +254,24 @@ app.put('/api/settings/:key', authenticateToken, async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// --- AUTH ---
 app.post('/register', async (req, res) => {
-  const { name, email, phone, cpf, bike_number, password } = req.body;
-  if (!name || !email || !cpf || !password) return res.status(400).json({ error: "Obrigatório" });
+  const { name, email, phone, cpf, bike_number, password, birth_date } = req.body;
+  
+  if (!name || !email || !cpf || !password || !birth_date) {
+      return res.status(400).json({ error: "Todos os campos obrigatórios (incluindo Data de Nascimento) devem ser preenchidos." });
+  }
+
   try {
       const hashedPassword = await bcrypt.hash(password, 10);
-      // RETURNING id é usado no Postgres para obter o ID gerado
       const result = await query(
-        `INSERT INTO users (name, email, phone, cpf, bike_number, password, role) VALUES ($1, $2, $3, $4, $5, $6, 'user') RETURNING id`, 
-        [name, email, phone, cpf, bike_number, hashedPassword]
+        `INSERT INTO users (name, email, phone, cpf, bike_number, password, role, birth_date) 
+         VALUES ($1, $2, $3, $4, $5, $6, 'user', $7) RETURNING id`, 
+        [name, email, phone, cpf, bike_number, hashedPassword, birth_date]
       );
       res.json({ message: "Sucesso!", userId: result.rows[0].id });
   } catch (err) {
-      if (err.code === '23505') { // Código Postgres para violação de UNIQUE
-          return res.status(400).json({ error: "Email/CPF duplicado." });
+      if (err.code === '23505') {
+          return res.status(400).json({ error: "Email ou CPF já cadastrado." });
       }
       res.status(500).json({ error: err.message });
   }
@@ -325,7 +312,6 @@ app.post('/forgot-password', async (req, res) => {
 app.post('/reset-password', async (req, res) => {
     const { token, newPassword } = req.body;
     try {
-        // Postgres usa TIMESTAMP, a comparação funciona diretamente
         const result = await query("SELECT * FROM users WHERE reset_token = $1 AND reset_expires > NOW()", [token]);
         const user = result.rows[0];
         
@@ -337,7 +323,6 @@ app.post('/reset-password', async (req, res) => {
     } catch (err) { res.status(500).json({ error: "Erro ao salvar." }); }
 });
 
-// --- PLANOS GERAIS ---
 app.get('/api/plans', async (req, res) => {
   try {
       const result = await query("SELECT * FROM plans");
@@ -345,10 +330,9 @@ app.get('/api/plans', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// --- USUÁRIOS ---
 app.get('/api/users', authenticateToken, async (req, res) => {
   try {
-      const result = await query(`SELECT id, name, email, phone, cpf, bike_number, chip_id, role FROM users ORDER BY name ASC`);
+      const result = await query(`SELECT id, name, email, phone, cpf, bike_number, chip_id, role, birth_date FROM users ORDER BY name ASC`);
       res.json(result.rows);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -356,17 +340,19 @@ app.get('/api/users', authenticateToken, async (req, res) => {
 app.get('/api/users/:id', authenticateToken, async (req, res) => {
     if (req.user.id != req.params.id && req.user.role !== 'admin') return res.status(403).json({ error: "Acesso negado." });
     try {
-        const result = await query("SELECT id, name, email, phone, cpf, bike_number, chip_id, role FROM users WHERE id = $1", [req.params.id]);
+        const result = await query("SELECT id, name, email, phone, cpf, bike_number, chip_id, role, birth_date FROM users WHERE id = $1", [req.params.id]);
         res.json(result.rows[0] || {});
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// ALTERADO: Rota PUT para permitir editar birth_date
 app.put('/api/users/:id', authenticateToken, async (req, res) => {
-    const { name, email, phone, bike_number, chip_id, role } = req.body;
+    // Adicionado birth_date aqui
+    const { name, email, phone, bike_number, chip_id, role, birth_date } = req.body;
     try {
         await query(
-            `UPDATE users SET name = $1, email = $2, phone = $3, bike_number = $4, chip_id = $5, role = $6 WHERE id = $7`, 
-            [name, email, phone, bike_number, chip_id, role, req.params.id]
+            `UPDATE users SET name = $1, email = $2, phone = $3, bike_number = $4, chip_id = $5, role = $6, birth_date = $7 WHERE id = $8`, 
+            [name, email, phone, bike_number, chip_id, role, birth_date, req.params.id]
         );
         res.json({ message: "Atualizado!" });
     } catch (err) { res.status(500).json({ error: err.message }); }
@@ -379,7 +365,6 @@ app.delete('/api/users/:id', authenticateToken, async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// --- ETAPAS ---
 app.get('/api/stages', async (req, res) => {
   try {
       const result = await query("SELECT * FROM stages ORDER BY date ASC");
@@ -389,7 +374,7 @@ app.get('/api/stages', async (req, res) => {
 
 app.post('/api/stages', authenticateToken, upload.single('image'), async (req, res) => {
   const imageUrl = req.file ? `/uploads/${req.file.filename}` : null;
-  const client = await pool.connect(); // Usar client para transação
+  const client = await pool.connect();
   try {
       await client.query('BEGIN');
       const insertRes = await client.query(
@@ -398,7 +383,6 @@ app.post('/api/stages', authenticateToken, upload.single('image'), async (req, r
       );
       const newStageId = insertRes.rows[0].id;
 
-      // Cria preços baseados no padrão
       for (const p of DEFAULT_PLANS) {
           await client.query("INSERT INTO stage_prices (stage_id, plan_id, price) VALUES ($1, $2, $3)", [newStageId, p.id, p.price]);
       }
@@ -435,14 +419,11 @@ app.delete('/api/stages/:id', authenticateToken, async (req, res) => {
             const filePath = path.join(__dirname, imgRes.rows[0].image_url);
             fs.unlink(filePath, (err) => {});
         }
-        // Cascade delete cuida das tabelas relacionadas (stage_prices, results, registrations) se configurado,
-        // mas no initDb definimos ON DELETE CASCADE, então só deletar o stage basta.
         await query("DELETE FROM stages WHERE id = $1", [req.params.id]);
         res.json({ message: "Excluído." });
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// --- PREÇOS ESPECÍFICOS POR ETAPA ---
 app.get('/api/stages/:id/prices', async (req, res) => {
     const stageId = req.params.id;
     const sql = `
@@ -488,7 +469,6 @@ app.put('/api/stages/:id/prices', authenticateToken, async (req, res) => {
     }
 });
 
-// --- INSCRIÇÕES ---
 app.post('/api/registrations', authenticateToken, async (req, res) => {
   const { user_id, stage_id, pilot_name, pilot_number, plan_name, categories, total_price } = req.body;
   const categoriesStr = Array.isArray(categories) ? categories.join(', ') : categories;
@@ -545,7 +525,6 @@ app.put('/api/registrations/:id/status', authenticateToken, async (req, res) => 
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// --- RESULTADOS ---
 app.get('/api/stages/:id/categories-status', async (req, res) => { 
     try {
         const result = await query(`SELECT DISTINCT category FROM results WHERE stage_id = $1`, [req.params.id]);
