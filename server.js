@@ -1,6 +1,6 @@
 require('dotenv').config();
 const express = require('express');
-const { Pool } = require('pg');
+const { Pool } = require('pg'); 
 const cors = require('cors');
 const bodyParser = require('body-parser');
 const multer = require('multer');
@@ -19,9 +19,10 @@ const app = express();
 const port = process.env.PORT || 3000;
 
 // =====================================================
-// 1. CONFIGURAÇÕES
+// 1. CONFIGURAÇÕES (EMAIL, UPLOAD, SEGURANÇA)
 // =====================================================
 
+// Correção IPv6 para E-mail
 const customLookup = (hostname, options, callback) => {
     dns.lookup(hostname, { family: 4 }, (err, address, family) => {
         if (err) return callback(err);
@@ -68,8 +69,15 @@ const upload = multer({ storage, fileFilter });
 
 app.use(helmet());
 app.use(helmet.crossOriginResourcePolicy({ policy: "cross-origin" })); 
-app.use(cors()); 
 app.use(bodyParser.json());
+
+// CONFIGURAÇÃO DE CORS: CRUCIAL PARA VERCEL
+// Seu Frontend e Backend estão no Vercel (diferentes subdomínios)
+app.use(cors({
+    origin: ['https://tamura-backend.vercel.app', 'http://localhost:5173', 'https://[SEU-FRONTEND-DOMINIO].vercel.app'], 
+    credentials: true
+}));
+
 app.use('/uploads', express.static('uploads')); 
 
 function authenticateToken(req, res, next) {
@@ -82,6 +90,10 @@ function authenticateToken(req, res, next) {
     next();
   });
 }
+
+// FUNÇÃO HELPER: Garante que strings vazias ('') virem NULL para o Postgres DATE
+const sanitize = (value) => (value === '' ? null : value);
+
 
 // =====================================================
 // 2. BANCO DE DADOS (POSTGRESQL)
@@ -241,7 +253,9 @@ app.get('/api/settings/:key', async (req, res) => {
     try {
         const result = await query("SELECT value FROM settings WHERE key = $1", [req.params.key]);
         res.json({ value: result.rows.length > 0 ? result.rows[0].value : '' });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+    } catch (err) { 
+        res.status(500).json({ error: err.message }); 
+    }
 });
 
 app.put('/api/settings/:key', authenticateToken, async (req, res) => {
@@ -251,7 +265,9 @@ app.put('/api/settings/:key', authenticateToken, async (req, res) => {
             [req.params.key, req.body.value]
         );
         res.json({ message: "Atualizado!" });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+    } catch (err) { 
+        res.status(500).json({ error: err.message }); 
+    }
 });
 
 app.post('/register', async (req, res) => {
@@ -266,7 +282,7 @@ app.post('/register', async (req, res) => {
       const result = await query(
         `INSERT INTO users (name, email, phone, cpf, bike_number, password, role, birth_date) 
          VALUES ($1, $2, $3, $4, $5, $6, 'user', $7) RETURNING id`, 
-        [name, email, phone, cpf, bike_number, hashedPassword, birth_date]
+        [name, email, phone, cpf, bike_number, hashedPassword, sanitize(birth_date)]
       );
       res.json({ message: "Sucesso!", userId: result.rows[0].id });
   } catch (err) {
@@ -290,7 +306,9 @@ app.post('/login', loginLimiter, async (req, res) => {
       
       const token = jwt.sign({ id: user.id, role: user.role }, process.env.JWT_SECRET, { expiresIn: '24h' });
       res.json({ id: user.id, name: user.name, role: user.role, bike_number: user.bike_number, token });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { 
+    res.status(500).json({ error: err.message }); 
+  }
 });
 
 app.post('/forgot-password', async (req, res) => {
@@ -306,7 +324,9 @@ app.post('/forgot-password', async (req, res) => {
         await query("UPDATE users SET reset_token = $1, reset_expires = $2 WHERE id = $3", [token, now, user.id]);
         await sendEmail(email, "Recuperação - Tamura Eventos", `Seu código de recuperação é: ${token}`);
         res.json({ message: "Token enviado." });
-    } catch (err) { res.status(500).json({ error: "Erro interno" }); }
+    } catch (err) { 
+        res.status(500).json({ error: "Erro interno" }); 
+    }
 });
 
 app.post('/reset-password', async (req, res) => {
@@ -320,21 +340,27 @@ app.post('/reset-password', async (req, res) => {
         const hashedPassword = await bcrypt.hash(newPassword, 10);
         await query("UPDATE users SET password = $1, reset_token = NULL, reset_expires = NULL WHERE id = $2", [hashedPassword, user.id]);
         res.json({ message: "Senha alterada!" });
-    } catch (err) { res.status(500).json({ error: "Erro ao salvar." }); }
+    } catch (err) { 
+        res.status(500).json({ error: "Erro ao salvar." }); 
+    }
 });
 
 app.get('/api/plans', async (req, res) => {
   try {
       const result = await query("SELECT * FROM plans");
       res.json(result.rows.map(r => ({ ...r, allowed: r.allowed ? JSON.parse(r.allowed) : null })));
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { 
+    res.status(500).json({ error: err.message }); 
+  }
 });
 
 app.get('/api/users', authenticateToken, async (req, res) => {
   try {
       const result = await query(`SELECT id, name, email, phone, cpf, bike_number, chip_id, role, birth_date FROM users ORDER BY name ASC`);
       res.json(result.rows);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { 
+    res.status(500).json({ error: err.message }); 
+  }
 });
 
 app.get('/api/users/:id', authenticateToken, async (req, res) => {
@@ -342,34 +368,40 @@ app.get('/api/users/:id', authenticateToken, async (req, res) => {
     try {
         const result = await query("SELECT id, name, email, phone, cpf, bike_number, chip_id, role, birth_date FROM users WHERE id = $1", [req.params.id]);
         res.json(result.rows[0] || {});
-    } catch (err) { res.status(500).json({ error: err.message }); }
+    } catch (err) { 
+        res.status(500).json({ error: err.message }); 
+    }
 });
 
-// ALTERADO: Rota PUT para permitir editar birth_date
 app.put('/api/users/:id', authenticateToken, async (req, res) => {
-    // Adicionado birth_date aqui
     const { name, email, phone, bike_number, chip_id, role, birth_date } = req.body;
     try {
         await query(
             `UPDATE users SET name = $1, email = $2, phone = $3, bike_number = $4, chip_id = $5, role = $6, birth_date = $7 WHERE id = $8`, 
-            [name, email, phone, bike_number, chip_id, role, birth_date, req.params.id]
+            [name, email, phone, bike_number, chip_id, role, sanitize(birth_date), req.params.id]
         );
         res.json({ message: "Atualizado!" });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+    } catch (err) { 
+        res.status(500).json({ error: err.message }); 
+    }
 });
 
 app.delete('/api/users/:id', authenticateToken, async (req, res) => {
     try {
         await query("DELETE FROM users WHERE id = $1", [req.params.id]);
         res.json({ message: "Excluído." });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+    } catch (err) { 
+        res.status(500).json({ error: err.message }); 
+    }
 });
 
 app.get('/api/stages', async (req, res) => {
   try {
       const result = await query("SELECT * FROM stages ORDER BY date ASC");
       res.json(result.rows);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { 
+    res.status(500).json({ error: err.message }); 
+  }
 });
 
 app.post('/api/stages', authenticateToken, upload.single('image'), async (req, res) => {
@@ -409,7 +441,9 @@ app.put('/api/stages/:id', authenticateToken, upload.single('image'), async (req
     try {
         await query(queryText, params);
         res.json({ message: "Atualizado!" });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+    } catch (err) { 
+        res.status(500).json({ error: err.message }); 
+    }
 });
 
 app.delete('/api/stages/:id', authenticateToken, async (req, res) => {
@@ -421,7 +455,9 @@ app.delete('/api/stages/:id', authenticateToken, async (req, res) => {
         }
         await query("DELETE FROM stages WHERE id = $1", [req.params.id]);
         res.json({ message: "Excluído." });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+    } catch (err) { 
+        res.status(500).json({ error: err.message }); 
+    }
 });
 
 app.get('/api/stages/:id/prices', async (req, res) => {
@@ -440,7 +476,9 @@ app.get('/api/stages/:id/prices', async (req, res) => {
         const formattedPlans = plansRes.rows.map(r => ({ ...r, allowed: r.allowed ? JSON.parse(r.allowed) : null }));
         
         res.json({ batch_name: batchName, plans: formattedPlans });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+    } catch (err) { 
+        res.status(500).json({ error: err.message }); 
+    }
 });
 
 app.put('/api/stages/:id/prices', authenticateToken, async (req, res) => {
@@ -478,7 +516,9 @@ app.post('/api/registrations', authenticateToken, async (req, res) => {
           [user_id, stage_id, pilot_name, pilot_number, plan_name, categoriesStr, total_price]
       );
       res.json({ message: "Inscrição OK!", registrationId: result.rows[0].id });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { 
+    res.status(500).json({ error: err.message }); 
+  }
 });
 
 app.get('/api/registrations/user/:userId', authenticateToken, async (req, res) => {
@@ -489,7 +529,9 @@ app.get('/api/registrations/user/:userId', authenticateToken, async (req, res) =
             [req.params.userId]
         );
         res.json(result.rows);
-    } catch (err) { res.status(500).json({ error: err.message }); }
+    } catch (err) { 
+        res.status(500).json({ error: err.message }); 
+    }
 });
 
 app.get('/api/registrations/stage/:stageId', authenticateToken, async (req, res) => {
@@ -499,7 +541,9 @@ app.get('/api/registrations/stage/:stageId', authenticateToken, async (req, res)
             [req.params.stageId]
         );
         res.json(result.rows);
-    } catch (err) { res.status(500).json({ error: err.message }); }
+    } catch (err) { 
+        res.status(500).json({ error: err.message }); 
+    }
 });
 
 app.put('/api/registrations/:id/status', authenticateToken, async (req, res) => {
@@ -522,14 +566,18 @@ app.put('/api/registrations/:id/status', authenticateToken, async (req, res) => 
             }
         }
         res.json({ message: "Status atualizado!" });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+    } catch (err) { 
+        res.status(500).json({ error: err.message }); 
+    }
 });
 
 app.get('/api/stages/:id/categories-status', async (req, res) => { 
     try {
         const result = await query(`SELECT DISTINCT category FROM results WHERE stage_id = $1`, [req.params.id]);
         res.json(result.rows.map(r => r.category));
-    } catch (err) { res.status(500).json({ error: err.message }); }
+    } catch (err) { 
+        res.status(500).json({ error: err.message }); 
+    }
 });
 
 app.get('/api/stages/:id/results/:category', async (req, res) => { 
@@ -539,7 +587,9 @@ app.get('/api/stages/:id/results/:category', async (req, res) => {
             [req.params.id, req.params.category]
         );
         res.json(result.rows);
-    } catch (err) { res.status(500).json({ error: err.message }); }
+    } catch (err) { 
+        res.status(500).json({ error: err.message }); 
+    }
 });
 
 app.post('/api/stages/:id/upload/:category', authenticateToken, upload.single('file'), async (req, res) => {
@@ -600,7 +650,9 @@ app.get('/api/standings/overall', async (req, res) => {
             `SELECT pilot_name, pilot_number, category, SUM(points) as total_points FROM results GROUP BY pilot_number, pilot_name, category ORDER BY category ASC, total_points DESC`
         );
         res.json(result.rows);
-    } catch (err) { res.status(500).json({ error: err.message }); }
+    } catch (err) { 
+        res.status(500).json({ error: err.message }); 
+    }
 });
 
 app.get('/api/stages/:id/standings', async (req, res) => { 
@@ -610,7 +662,10 @@ app.get('/api/stages/:id/standings', async (req, res) => {
             [req.params.id]
         );
         res.json(result.rows); 
-    } catch (err) { res.status(500).json({ error: err.message }); }
+    } catch (err) { 
+        res.status(500).json({ error: err.message }); 
+    }
 });
 
+// EXPORTAÇÃO PARA O VERCEL SERVERLESS (substitui app.listen)
 module.exports = app;
