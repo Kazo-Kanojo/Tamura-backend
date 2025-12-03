@@ -71,10 +71,9 @@ app.use(helmet());
 app.use(helmet.crossOriginResourcePolicy({ policy: "cross-origin" })); 
 app.use(bodyParser.json());
 
-// CONFIGURAÇÃO DE CORS: CRUCIAL PARA VERCEL
-// Seu Frontend e Backend estão no Vercel (diferentes subdomínios)
+// **CORREÇÃO FINAL DE CORS**: Adiciona a URL do Frontend Vercel (do log de erro)
 app.use(cors({
-    origin: ['https://tamura-backend.vercel.app', 'http://localhost:5173', 'https://[SEU-FRONTEND-DOMINIO].vercel.app'], 
+    origin: ['https://tamura-frontend.vercel.app', 'http://localhost:5173'], 
     credentials: true
 }));
 
@@ -91,7 +90,6 @@ function authenticateToken(req, res, next) {
   });
 }
 
-// FUNÇÃO HELPER: Garante que strings vazias ('') virem NULL para o Postgres DATE
 const sanitize = (value) => (value === '' ? null : value);
 
 
