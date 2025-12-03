@@ -613,4 +613,4 @@ app.get('/api/stages/:id/standings', async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.listen(port, () => { console.log(`Server running at http://localhost:${port}`); });
+module.exports = app;
