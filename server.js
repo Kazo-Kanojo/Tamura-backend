@@ -1,6 +1,6 @@
 require('dotenv').config();
 const express = require('express');
-const sqlite3 = require('sqlite3').verbose();
+const { Pool } = require('pg'); // Alterado de sqlite3 para pg
 const cors = require('cors');
 const bodyParser = require('body-parser');
 const multer = require('multer');
@@ -72,15 +72,7 @@ const upload = multer({ storage, fileFilter });
 // Middlewares
 app.use(helmet());
 app.use(helmet.crossOriginResourcePolicy({ policy: "cross-origin" })); 
-app.use(cors()); 
-
-// OU
-
-// Opção B (Mais segura - Troque pelo seu link REAL da Vercel)
-app.use(cors({
-    origin: ['https://tamura-eventos.vercel.app', 'http://localhost:5173'],
-    credentials: true
-}));
+app.use(cors()); // Configure a origem específica em produção se necessário
 app.use(bodyParser.json());
 app.use('/uploads', express.static('uploads')); 
 
@@ -96,10 +88,20 @@ function authenticateToken(req, res, next) {
 }
 
 // =====================================================
-// 2. BANCO DE DADOS
+// 2. BANCO DE DADOS (POSTGRESQL)
 // =====================================================
 
-const db = new sqlite3.Database('./database.sqlite');
+const pool = new Pool({
+  user: process.env.PG_USER,
+  host: process.env.PG_HOST,
+  database: process.env.PG_DATABASE,
+  password: process.env.PG_PASSWORD,
+  port: process.env.PG_PORT || 5432,
+  ssl: process.env.PG_SSL === 'true' ? { rejectUnauthorized: false } : false // Necessário para Render/Supabase
+});
+
+// Helper para queries simples
+const query = (text, params) => pool.query(text, params);
 
 const DEFAULT_PLANS = [
   { id: '50cc',       name: '50cc',          price: 80,  limit_cat: 1,  allowed: JSON.stringify(['50cc']), description: 'Exclusivo para categoria 50cc' },
@@ -111,59 +113,129 @@ const DEFAULT_PLANS = [
   { id: 'full',       name: 'Full Pass',     price: 230, limit_cat: 99, allowed: null, description: 'Acesso total a todas as categorias' },
 ];
 
-db.serialize(() => {
-  // Configurações Globais
-  db.run(`CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)`);
-  db.run(`INSERT OR IGNORE INTO settings (key, value) VALUES ('pix_key', '')`);
+// Inicialização do Banco de Dados
+const initDb = async () => {
+  try {
+    console.log("Conectando ao PostgreSQL...");
+    // Configurações Globais
+    await query(`CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)`);
+    await query(`INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO NOTHING`, ['pix_key', '']);
 
-  // Usuários
-  db.run(`CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, email TEXT UNIQUE, phone TEXT, cpf TEXT UNIQUE, bike_number TEXT, chip_id TEXT, password TEXT, role TEXT DEFAULT 'user', reset_token TEXT, reset_expires DATETIME)`);
-  db.run("ALTER TABLE users ADD COLUMN chip_id TEXT", (err) => {}); 
-  db.run("ALTER TABLE users ADD COLUMN reset_token TEXT", (err) => {}); 
-  db.run("ALTER TABLE users ADD COLUMN reset_expires DATETIME", (err) => {}); 
+    // Usuários (SERIAL substitui AUTOINCREMENT)
+    await query(`CREATE TABLE IF NOT EXISTS users (
+      id SERIAL PRIMARY KEY, 
+      name TEXT, 
+      email TEXT UNIQUE, 
+      phone TEXT, 
+      cpf TEXT UNIQUE, 
+      bike_number TEXT, 
+      chip_id TEXT, 
+      password TEXT, 
+      role TEXT DEFAULT 'user', 
+      reset_token TEXT, 
+      reset_expires TIMESTAMP
+    )`);
 
-  // Etapas (Stages) - Com Batch Name (Nome do Lote)
-  db.run(`CREATE TABLE IF NOT EXISTS stages (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, location TEXT, date TEXT, image_url TEXT, status TEXT DEFAULT 'upcoming', batch_name TEXT DEFAULT 'Lote Inicial')`);
-  db.run("ALTER TABLE stages ADD COLUMN image_url TEXT", (err) => {}); 
-  db.run("ALTER TABLE stages ADD COLUMN batch_name TEXT DEFAULT 'Lote Inicial'", (err) => {}); 
+    // Etapas (Stages)
+    await query(`CREATE TABLE IF NOT EXISTS stages (
+      id SERIAL PRIMARY KEY, 
+      name TEXT, 
+      location TEXT, 
+      date TEXT, 
+      image_url TEXT, 
+      status TEXT DEFAULT 'upcoming', 
+      batch_name TEXT DEFAULT 'Lote Inicial'
+    )`);
 
-  // Planos Base (Templates)
-  db.run(`CREATE TABLE IF NOT EXISTS plans (id TEXT PRIMARY KEY, name TEXT, price REAL, limit_cat INTEGER, allowed TEXT, description TEXT)`);
-  db.get("SELECT count(*) as count FROM plans", (err, row) => {
-    if (row && row.count === 0) {
-      const stmt = db.prepare("INSERT INTO plans (id, name, price, limit_cat, allowed, description) VALUES (?, ?, ?, ?, ?, ?)");
-      DEFAULT_PLANS.forEach(plan => {
-        stmt.run(plan.id, plan.name, plan.price, plan.limit_cat, plan.allowed, plan.description);
-      });
-      stmt.finalize();
+    // Planos Base
+    await query(`CREATE TABLE IF NOT EXISTS plans (
+      id TEXT PRIMARY KEY, 
+      name TEXT, 
+      price REAL, 
+      limit_cat INTEGER, 
+      allowed TEXT, 
+      description TEXT
+    )`);
+
+    // Inicializa Planos Padrão
+    const plansCount = await query("SELECT count(*) as count FROM plans");
+    if (parseInt(plansCount.rows[0].count) === 0) {
+      for (const plan of DEFAULT_PLANS) {
+        await query(
+          "INSERT INTO plans (id, name, price, limit_cat, allowed, description) VALUES ($1, $2, $3, $4, $5, $6)",
+          [plan.id, plan.name, plan.price, plan.limit_cat, plan.allowed, plan.description]
+        );
+      }
     }
-  });
 
-  // Preços por Etapa (NOVA TABELA)
-  db.run(`CREATE TABLE IF NOT EXISTS stage_prices (
-      stage_id INTEGER,
-      plan_id TEXT,
-      price REAL,
-      PRIMARY KEY (stage_id, plan_id),
-      FOREIGN KEY(stage_id) REFERENCES stages(id),
-      FOREIGN KEY(plan_id) REFERENCES plans(id)
-  )`);
+    // Preços por Etapa
+    await query(`CREATE TABLE IF NOT EXISTS stage_prices (
+        stage_id INTEGER,
+        plan_id TEXT,
+        price REAL,
+        PRIMARY KEY (stage_id, plan_id),
+        FOREIGN KEY(stage_id) REFERENCES stages(id) ON DELETE CASCADE,
+        FOREIGN KEY(plan_id) REFERENCES plans(id)
+    )`);
 
-  // Resultados e Inscrições
-  db.run(`CREATE TABLE IF NOT EXISTS results (id INTEGER PRIMARY KEY AUTOINCREMENT, stage_id INTEGER, position INTEGER, epc TEXT, pilot_number TEXT, pilot_name TEXT, category TEXT, laps TEXT, total_time TEXT, last_lap TEXT, diff_first TEXT, diff_prev TEXT, best_lap TEXT, avg_speed TEXT, points INTEGER, FOREIGN KEY(stage_id) REFERENCES stages(id))`);
-  db.run(`CREATE TABLE IF NOT EXISTS registrations (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, stage_id INTEGER, pilot_name TEXT, pilot_number TEXT, plan_name TEXT, categories TEXT, total_price REAL, status TEXT DEFAULT 'pending', created_at DATETIME DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(user_id) REFERENCES users(id), FOREIGN KEY(stage_id) REFERENCES stages(id))`);
+    // Resultados
+    await query(`CREATE TABLE IF NOT EXISTS results (
+      id SERIAL PRIMARY KEY, 
+      stage_id INTEGER, 
+      position INTEGER, 
+      epc TEXT, 
+      pilot_number TEXT, 
+      pilot_name TEXT, 
+      category TEXT, 
+      laps TEXT, 
+      total_time TEXT, 
+      last_lap TEXT, 
+      diff_first TEXT, 
+      diff_prev TEXT, 
+      best_lap TEXT, 
+      avg_speed TEXT, 
+      points INTEGER, 
+      FOREIGN KEY(stage_id) REFERENCES stages(id) ON DELETE CASCADE
+    )`);
 
-  // Admin Padrão
-  const adminEmail = '10tamura@gmail.com'; 
-  const rawPass = '1234';
-  db.get("SELECT * FROM users WHERE email = ?", [adminEmail], (err, row) => {
-    if (!row) {
+    // Inscrições
+    await query(`CREATE TABLE IF NOT EXISTS registrations (
+      id SERIAL PRIMARY KEY, 
+      user_id INTEGER, 
+      stage_id INTEGER, 
+      pilot_name TEXT, 
+      pilot_number TEXT, 
+      plan_name TEXT, 
+      categories TEXT, 
+      total_price REAL, 
+      status TEXT DEFAULT 'pending', 
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, 
+      FOREIGN KEY(user_id) REFERENCES users(id), 
+      FOREIGN KEY(stage_id) REFERENCES stages(id) ON DELETE CASCADE
+    )`);
+
+    // Admin Padrão
+    const adminEmail = '10tamura@gmail.com'; 
+    const rawPass = '1234';
+    const adminUser = await query("SELECT * FROM users WHERE email = $1", [adminEmail]);
+    
+    if (adminUser.rows.length === 0) {
       const hashedPassword = bcrypt.hashSync(rawPass, 10);
-      db.run(`INSERT INTO users (name, email, phone, cpf, bike_number, password, role) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        ['Admin Tamura', adminEmail, '999999999', '00000000000', '00', hashedPassword, 'admin']);
+      await query(
+        `INSERT INTO users (name, email, phone, cpf, bike_number, password, role) VALUES ($1, $2, $3, $4, $5, $6, 'admin')`,
+        ['Admin Tamura', adminEmail, '999999999', '00000000000', '00', hashedPassword]
+      );
+      console.log("Admin padrão criado.");
     }
-  });
-});
+
+    console.log("Banco de dados PostgreSQL inicializado com sucesso.");
+  } catch (err) {
+    console.error("Erro ao inicializar banco de dados:", err);
+  }
+};
+
+// Executa a inicialização
+initDb();
 
 const getPointsByPosition = (position) => {
   const pointsMap = { 1: 25, 2: 22, 3: 20, 4: 18, 5: 16, 6: 15, 7: 14, 8: 13, 9: 12, 10: 11, 11: 10, 12: 9, 13: 8, 14: 7, 15: 6, 16: 5, 17: 4, 18: 3, 19: 2, 20: 1 };
@@ -174,19 +246,28 @@ const getPointsByPosition = (position) => {
 // ROTAS API
 // =====================================================
 
-// --- BACKUP ---
+// --- BACKUP (DESATIVADO NO POSTGRES - Use pg_dump no servidor) ---
 app.get('/api/admin/backup', authenticateToken, (req, res) => {
     if (req.user.role !== 'admin') return res.status(403).json({ error: "Acesso negado." });
-    const dbPath = path.join(__dirname, 'database.sqlite');
-    res.download(dbPath, 'backup_tamura.sqlite', (err) => { if (err) console.error("Erro download:", err); });
+    res.status(501).json({ error: "Backup via arquivo não suportado no PostgreSQL. Utilize pg_dump." });
 });
 
-// --- SETTINGS (Chave PIX Global) ---
-app.get('/api/settings/:key', (req, res) => {
-    db.get("SELECT value FROM settings WHERE key = ?", [req.params.key], (err, row) => { if (err) return res.status(500).json({ error: err.message }); res.json({ value: row ? row.value : '' }); });
+// --- SETTINGS ---
+app.get('/api/settings/:key', async (req, res) => {
+    try {
+        const result = await query("SELECT value FROM settings WHERE key = $1", [req.params.key]);
+        res.json({ value: result.rows.length > 0 ? result.rows[0].value : '' });
+    } catch (err) { res.status(500).json({ error: err.message }); }
 });
-app.put('/api/settings/:key', authenticateToken, (req, res) => {
-    db.run("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", [req.params.key, req.body.value], function(err) { if (err) return res.status(500).json({ error: err.message }); res.json({ message: "Atualizado!" }); });
+
+app.put('/api/settings/:key', authenticateToken, async (req, res) => {
+    try {
+        await query(
+            "INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = $2",
+            [req.params.key, req.body.value]
+        );
+        res.json({ message: "Atualizado!" });
+    } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // --- AUTH ---
@@ -195,200 +276,310 @@ app.post('/register', async (req, res) => {
   if (!name || !email || !cpf || !password) return res.status(400).json({ error: "Obrigatório" });
   try {
       const hashedPassword = await bcrypt.hash(password, 10);
-      db.run(`INSERT INTO users (name, email, phone, cpf, bike_number, password, role) VALUES (?, ?, ?, ?, ?, ?, 'user')`, 
-        [name, email, phone, cpf, bike_number, hashedPassword], function(err) {
-          if (err) { if (err.message.includes('UNIQUE')) return res.status(400).json({ error: "Email/CPF duplicado." }); return res.status(500).json({ error: err.message }); }
-          res.json({ message: "Sucesso!", userId: this.lastID });
-      });
-  } catch (e) { res.status(500).json({ error: "Erro senha" }); }
+      // RETURNING id é usado no Postgres para obter o ID gerado
+      const result = await query(
+        `INSERT INTO users (name, email, phone, cpf, bike_number, password, role) VALUES ($1, $2, $3, $4, $5, $6, 'user') RETURNING id`, 
+        [name, email, phone, cpf, bike_number, hashedPassword]
+      );
+      res.json({ message: "Sucesso!", userId: result.rows[0].id });
+  } catch (err) {
+      if (err.code === '23505') { // Código Postgres para violação de UNIQUE
+          return res.status(400).json({ error: "Email/CPF duplicado." });
+      }
+      res.status(500).json({ error: err.message });
+  }
 });
 
-app.post('/login', loginLimiter, (req, res) => {
+app.post('/login', loginLimiter, async (req, res) => {
   const { identifier, password } = req.body;
-  db.get(`SELECT * FROM users WHERE (email = ? OR name = ? OR phone = ?)`, [identifier, identifier, identifier], async (err, user) => {
-    if (err) return res.status(500).json({ error: err.message });
-    if (!user) return res.status(401).json({ error: "Não encontrado." });
-    const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) return res.status(401).json({ error: "Senha incorreta." });
-    const token = jwt.sign({ id: user.id, role: user.role }, process.env.JWT_SECRET, { expiresIn: '24h' });
-    res.json({ id: user.id, name: user.name, role: user.role, bike_number: user.bike_number, token });
-  });
+  try {
+      const result = await query(`SELECT * FROM users WHERE (email = $1 OR name = $1 OR phone = $1)`, [identifier]);
+      const user = result.rows[0];
+      
+      if (!user) return res.status(401).json({ error: "Não encontrado." });
+      
+      const isMatch = await bcrypt.compare(password, user.password);
+      if (!isMatch) return res.status(401).json({ error: "Senha incorreta." });
+      
+      const token = jwt.sign({ id: user.id, role: user.role }, process.env.JWT_SECRET, { expiresIn: '24h' });
+      res.json({ id: user.id, name: user.name, role: user.role, bike_number: user.bike_number, token });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.post('/forgot-password', (req, res) => {
+app.post('/forgot-password', async (req, res) => {
     const { email } = req.body;
-    db.get("SELECT * FROM users WHERE email = ?", [email], (err, user) => {
+    try {
+        const result = await query("SELECT * FROM users WHERE email = $1", [email]);
+        const user = result.rows[0];
         if (!user) return res.status(404).json({ error: "E-mail não encontrado." });
+        
         const token = crypto.randomBytes(20).toString('hex');
         const now = new Date(); now.setHours(now.getHours() + 1);
-        db.run("UPDATE users SET reset_token = ?, reset_expires = ? WHERE id = ?", [token, now.toISOString(), user.id], async (err) => {
-            if (err) return res.status(500).json({ error: "Erro banco" });
-            await sendEmail(email, "Recuperação - Tamura Eventos", `Seu código de recuperação é: ${token}`);
-            res.json({ message: "Token enviado." });
-        });
-    });
+        
+        await query("UPDATE users SET reset_token = $1, reset_expires = $2 WHERE id = $3", [token, now, user.id]);
+        await sendEmail(email, "Recuperação - Tamura Eventos", `Seu código de recuperação é: ${token}`);
+        res.json({ message: "Token enviado." });
+    } catch (err) { res.status(500).json({ error: "Erro interno" }); }
 });
 
 app.post('/reset-password', async (req, res) => {
     const { token, newPassword } = req.body;
-    db.get("SELECT * FROM users WHERE reset_token = ? AND reset_expires > ?", [token, new Date().toISOString()], async (err, user) => {
+    try {
+        // Postgres usa TIMESTAMP, a comparação funciona diretamente
+        const result = await query("SELECT * FROM users WHERE reset_token = $1 AND reset_expires > NOW()", [token]);
+        const user = result.rows[0];
+        
         if (!user) return res.status(400).json({ error: "Token inválido/expirado." });
+        
         const hashedPassword = await bcrypt.hash(newPassword, 10);
-        db.run("UPDATE users SET password = ?, reset_token = NULL, reset_expires = NULL WHERE id = ?", [hashedPassword, user.id], (err) => {
-            if (err) return res.status(500).json({ error: "Erro ao salvar." });
-            res.json({ message: "Senha alterada!" });
-        });
-    });
+        await query("UPDATE users SET password = $1, reset_token = NULL, reset_expires = NULL WHERE id = $2", [hashedPassword, user.id]);
+        res.json({ message: "Senha alterada!" });
+    } catch (err) { res.status(500).json({ error: "Erro ao salvar." }); }
 });
 
 // --- PLANOS GERAIS ---
-app.get('/api/plans', (req, res) => {
-  db.all("SELECT * FROM plans", [], (err, rows) => {
-    if (err) return res.status(500).json({ error: err.message });
-    res.json(rows.map(r => ({ ...r, allowed: r.allowed ? JSON.parse(r.allowed) : null })));
-  });
+app.get('/api/plans', async (req, res) => {
+  try {
+      const result = await query("SELECT * FROM plans");
+      res.json(result.rows.map(r => ({ ...r, allowed: r.allowed ? JSON.parse(r.allowed) : null })));
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // --- USUÁRIOS ---
-app.get('/api/users', authenticateToken, (req, res) => {
-  db.all(`SELECT id, name, email, phone, cpf, bike_number, chip_id, role FROM users ORDER BY name ASC`, [], (err, rows) => { if (err) return res.status(500).json({ error: err.message }); res.json(rows); });
+app.get('/api/users', authenticateToken, async (req, res) => {
+  try {
+      const result = await query(`SELECT id, name, email, phone, cpf, bike_number, chip_id, role FROM users ORDER BY name ASC`);
+      res.json(result.rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
-app.get('/api/users/:id', authenticateToken, (req, res) => {
+
+app.get('/api/users/:id', authenticateToken, async (req, res) => {
     if (req.user.id != req.params.id && req.user.role !== 'admin') return res.status(403).json({ error: "Acesso negado." });
-    db.get("SELECT id, name, email, phone, cpf, bike_number, chip_id, role FROM users WHERE id = ?", [req.params.id], (err, row) => { if (err) return res.status(500).json({ error: err.message }); res.json(row||{}); });
+    try {
+        const result = await query("SELECT id, name, email, phone, cpf, bike_number, chip_id, role FROM users WHERE id = $1", [req.params.id]);
+        res.json(result.rows[0] || {});
+    } catch (err) { res.status(500).json({ error: err.message }); }
 });
-app.put('/api/users/:id', authenticateToken, (req, res) => {
+
+app.put('/api/users/:id', authenticateToken, async (req, res) => {
     const { name, email, phone, bike_number, chip_id, role } = req.body;
-    db.run(`UPDATE users SET name = ?, email = ?, phone = ?, bike_number = ?, chip_id = ?, role = ? WHERE id = ?`, [name, email, phone, bike_number, chip_id, role, req.params.id], function(err) {
-        if (err) return res.status(500).json({ error: err.message }); res.json({ message: "Atualizado!" });
-    });
-});
-app.delete('/api/users/:id', authenticateToken, (req, res) => {
-    db.run("DELETE FROM users WHERE id = ?", [req.params.id], function(err) { if (err) return res.status(500).json({ error: err.message }); res.json({ message: "Excluído." }); });
-});
-
-// --- ETAPAS (COM CRIAÇÃO DE PREÇOS AUTOMÁTICA) ---
-app.get('/api/stages', (req, res) => {
-  db.all("SELECT * FROM stages ORDER BY date ASC", [], (err, rows) => { if (err) return res.status(500).json({ error: err.message }); res.json(rows); });
+    try {
+        await query(
+            `UPDATE users SET name = $1, email = $2, phone = $3, bike_number = $4, chip_id = $5, role = $6 WHERE id = $7`, 
+            [name, email, phone, bike_number, chip_id, role, req.params.id]
+        );
+        res.json({ message: "Atualizado!" });
+    } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.post('/api/stages', authenticateToken, upload.single('image'), (req, res) => {
+app.delete('/api/users/:id', authenticateToken, async (req, res) => {
+    try {
+        await query("DELETE FROM users WHERE id = $1", [req.params.id]);
+        res.json({ message: "Excluído." });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// --- ETAPAS ---
+app.get('/api/stages', async (req, res) => {
+  try {
+      const result = await query("SELECT * FROM stages ORDER BY date ASC");
+      res.json(result.rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/stages', authenticateToken, upload.single('image'), async (req, res) => {
   const imageUrl = req.file ? `/uploads/${req.file.filename}` : null;
-  db.run(`INSERT INTO stages (name, location, date, image_url, batch_name) VALUES (?, ?, ?, ?, 'Lote Inicial')`, 
-    [req.body.name, req.body.location, req.body.date, imageUrl], 
-    function(err) {
-      if (err) return res.status(500).json({ error: err.message });
+  const client = await pool.connect(); // Usar client para transação
+  try {
+      await client.query('BEGIN');
+      const insertRes = await client.query(
+          `INSERT INTO stages (name, location, date, image_url, batch_name) VALUES ($1, $2, $3, $4, 'Lote Inicial') RETURNING id`, 
+          [req.body.name, req.body.location, req.body.date, imageUrl]
+      );
+      const newStageId = insertRes.rows[0].id;
+
+      // Cria preços baseados no padrão
+      for (const p of DEFAULT_PLANS) {
+          await client.query("INSERT INTO stage_prices (stage_id, plan_id, price) VALUES ($1, $2, $3)", [newStageId, p.id, p.price]);
+      }
       
-      const newStageId = this.lastID;
-      // Cria preços para esta nova etapa baseados no padrão
-      const stmt = db.prepare("INSERT INTO stage_prices (stage_id, plan_id, price) VALUES (?, ?, ?)");
-      DEFAULT_PLANS.forEach(p => stmt.run(newStageId, p.id, p.price));
-      stmt.finalize();
-
+      await client.query('COMMIT');
       res.json({ id: newStageId, message: "Criado!" });
-  });
+  } catch (err) {
+      await client.query('ROLLBACK');
+      res.status(500).json({ error: err.message });
+  } finally {
+      client.release();
+  }
 });
 
-app.put('/api/stages/:id', authenticateToken, upload.single('image'), (req, res) => {
-    let query = `UPDATE stages SET name = ?, location = ?, date = ? WHERE id = ?`;
+app.put('/api/stages/:id', authenticateToken, upload.single('image'), async (req, res) => {
+    let queryText = `UPDATE stages SET name = $1, location = $2, date = $3 WHERE id = $4`;
     let params = [req.body.name, req.body.location, req.body.date, req.params.id];
-    if (req.file) { query = `UPDATE stages SET name = ?, location = ?, date = ?, image_url = ? WHERE id = ?`; params = [req.body.name, req.body.location, req.body.date, `/uploads/${req.file.filename}`, req.params.id]; }
-    db.run(query, params, function(err) { if (err) return res.status(500).json({ error: err.message }); res.json({ message: "Atualizado!" }); });
+    
+    if (req.file) { 
+        queryText = `UPDATE stages SET name = $1, location = $2, date = $3, image_url = $4 WHERE id = $5`;
+        params = [req.body.name, req.body.location, req.body.date, `/uploads/${req.file.filename}`, req.params.id];
+    }
+    
+    try {
+        await query(queryText, params);
+        res.json({ message: "Atualizado!" });
+    } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.delete('/api/stages/:id', authenticateToken, (req, res) => {
-    db.get("SELECT image_url FROM stages WHERE id = ?", [req.params.id], (err, row) => {
-        if (row && row.image_url) { const filePath = path.join(__dirname, row.image_url); fs.unlink(filePath, (err) => {}); }
-        db.serialize(() => {
-            db.run("DELETE FROM stage_prices WHERE stage_id = ?", [req.params.id]); // Limpa preços
-            db.run("DELETE FROM results WHERE stage_id = ?", [req.params.id]);
-            db.run("DELETE FROM registrations WHERE stage_id = ?", [req.params.id]);
-            db.run("DELETE FROM stages WHERE id = ?", [req.params.id], function(err) {
-                if (err) return res.status(500).json({ error: err.message }); res.json({ message: "Excluído." });
-            });
-        });
-    });
+app.delete('/api/stages/:id', authenticateToken, async (req, res) => {
+    try {
+        const imgRes = await query("SELECT image_url FROM stages WHERE id = $1", [req.params.id]);
+        if (imgRes.rows[0] && imgRes.rows[0].image_url) {
+            const filePath = path.join(__dirname, imgRes.rows[0].image_url);
+            fs.unlink(filePath, (err) => {});
+        }
+        // Cascade delete cuida das tabelas relacionadas (stage_prices, results, registrations) se configurado,
+        // mas no initDb definimos ON DELETE CASCADE, então só deletar o stage basta.
+        await query("DELETE FROM stages WHERE id = $1", [req.params.id]);
+        res.json({ message: "Excluído." });
+    } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// --- PREÇOS ESPECÍFICOS POR ETAPA (NOVO) ---
-app.get('/api/stages/:id/prices', (req, res) => {
+// --- PREÇOS ESPECÍFICOS POR ETAPA ---
+app.get('/api/stages/:id/prices', async (req, res) => {
     const stageId = req.params.id;
-    const query = `
+    const sql = `
         SELECT p.id, p.name, p.limit_cat, p.allowed, p.description, 
                COALESCE(sp.price, p.price) as price 
         FROM plans p
-        LEFT JOIN stage_prices sp ON p.id = sp.plan_id AND sp.stage_id = ?
+        LEFT JOIN stage_prices sp ON p.id = sp.plan_id AND sp.stage_id = $1
     `;
-    db.all(query, [stageId], (err, rows) => {
-        if (err) return res.status(500).json({ error: err.message });
-        db.get("SELECT batch_name FROM stages WHERE id = ?", [stageId], (err, stage) => {
-            const batchName = stage ? stage.batch_name : 'Lote Inicial';
-            const formattedPlans = rows.map(r => ({ ...r, allowed: r.allowed ? JSON.parse(r.allowed) : null }));
-            res.json({ batch_name: batchName, plans: formattedPlans });
-        });
-    });
+    try {
+        const plansRes = await query(sql, [stageId]);
+        const stageRes = await query("SELECT batch_name FROM stages WHERE id = $1", [stageId]);
+        
+        const batchName = stageRes.rows[0] ? stageRes.rows[0].batch_name : 'Lote Inicial';
+        const formattedPlans = plansRes.rows.map(r => ({ ...r, allowed: r.allowed ? JSON.parse(r.allowed) : null }));
+        
+        res.json({ batch_name: batchName, plans: formattedPlans });
+    } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.put('/api/stages/:id/prices', authenticateToken, (req, res) => {
+app.put('/api/stages/:id/prices', authenticateToken, async (req, res) => {
     const stageId = req.params.id;
     const { batch_name, plans } = req.body;
+    const client = await pool.connect();
     
-    db.run("UPDATE stages SET batch_name = ? WHERE id = ?", [batch_name, stageId], (err) => {
-        if (err) return res.status(500).json({ error: "Erro lote" });
-        const stmt = db.prepare("INSERT OR REPLACE INTO stage_prices (stage_id, plan_id, price) VALUES (?, ?, ?)");
-        plans.forEach(p => stmt.run(stageId, p.id, p.price));
-        stmt.finalize();
+    try {
+        await client.query('BEGIN');
+        await client.query("UPDATE stages SET batch_name = $1 WHERE id = $2", [batch_name, stageId]);
+        
+        for (const p of plans) {
+            await client.query(
+                `INSERT INTO stage_prices (stage_id, plan_id, price) VALUES ($1, $2, $3)
+                 ON CONFLICT (stage_id, plan_id) DO UPDATE SET price = $3`,
+                [stageId, p.id, p.price]
+            );
+        }
+        await client.query('COMMIT');
         res.json({ message: "Preços atualizados!" });
-    });
+    } catch (err) {
+        await client.query('ROLLBACK');
+        res.status(500).json({ error: "Erro lote" });
+    } finally {
+        client.release();
+    }
 });
 
 // --- INSCRIÇÕES ---
-app.post('/api/registrations', authenticateToken, (req, res) => {
+app.post('/api/registrations', authenticateToken, async (req, res) => {
   const { user_id, stage_id, pilot_name, pilot_number, plan_name, categories, total_price } = req.body;
   const categoriesStr = Array.isArray(categories) ? categories.join(', ') : categories;
-  db.run(`INSERT INTO registrations (user_id, stage_id, pilot_name, pilot_number, plan_name, categories, total_price) VALUES (?, ?, ?, ?, ?, ?, ?)`, [user_id, stage_id, pilot_name, pilot_number, plan_name, categoriesStr, total_price], function(err) {
-      if (err) return res.status(500).json({ error: err.message }); res.json({ message: "Inscrição OK!", registrationId: this.lastID });
-  });
+  try {
+      const result = await query(
+          `INSERT INTO registrations (user_id, stage_id, pilot_name, pilot_number, plan_name, categories, total_price) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`, 
+          [user_id, stage_id, pilot_name, pilot_number, plan_name, categoriesStr, total_price]
+      );
+      res.json({ message: "Inscrição OK!", registrationId: result.rows[0].id });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
-app.get('/api/registrations/user/:userId', authenticateToken, (req, res) => {
+
+app.get('/api/registrations/user/:userId', authenticateToken, async (req, res) => {
     if (req.user.id != req.params.userId && req.user.role !== 'admin') return res.status(403).json({ error: "Acesso negado." });
-    db.all(`SELECT r.*, s.name as stage_name, s.date as stage_date, s.image_url FROM registrations r JOIN stages s ON r.stage_id = s.id WHERE r.user_id = ? ORDER BY r.created_at DESC`, [req.params.userId], (err, rows) => { if (err) return res.status(500).json({ error: err.message }); res.json(rows); });
+    try {
+        const result = await query(
+            `SELECT r.*, s.name as stage_name, s.date as stage_date, s.image_url FROM registrations r JOIN stages s ON r.stage_id = s.id WHERE r.user_id = $1 ORDER BY r.created_at DESC`, 
+            [req.params.userId]
+        );
+        res.json(result.rows);
+    } catch (err) { res.status(500).json({ error: err.message }); }
 });
-app.get('/api/registrations/stage/:stageId', authenticateToken, (req, res) => {
-    db.all(`SELECT r.*, u.phone, u.cpf, u.email FROM registrations r LEFT JOIN users u ON r.user_id = u.id WHERE r.stage_id = ? ORDER BY r.pilot_name ASC`, [req.params.stageId], (err, rows) => { if (err) return res.status(500).json({ error: err.message }); res.json(rows); });
+
+app.get('/api/registrations/stage/:stageId', authenticateToken, async (req, res) => {
+    try {
+        const result = await query(
+            `SELECT r.*, u.phone, u.cpf, u.email FROM registrations r LEFT JOIN users u ON r.user_id = u.id WHERE r.stage_id = $1 ORDER BY r.pilot_name ASC`, 
+            [req.params.stageId]
+        );
+        res.json(result.rows);
+    } catch (err) { res.status(500).json({ error: err.message }); }
 });
-app.put('/api/registrations/:id/status', authenticateToken, (req, res) => {
+
+app.put('/api/registrations/:id/status', authenticateToken, async (req, res) => {
     const { status } = req.body;
-    db.run(`UPDATE registrations SET status = ? WHERE id = ?`, [status, req.params.id], function(err) {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json({ message: "Status atualizado!" });
+    try {
+        await query(`UPDATE registrations SET status = $1 WHERE id = $2`, [status, req.params.id]);
+        
         if (status === 'paid') {
-            db.get(`SELECT r.*, u.email, s.name as stage_name FROM registrations r JOIN users u ON r.user_id = u.id JOIN stages s ON r.stage_id = s.id WHERE r.id = ?`, [req.params.id], async (err, row) => {
-                if (!err && row && row.email) {
-                    await sendEmail(
-                        row.email, 
-                        "Inscrição Confirmada - Tamura Eventos", 
-                        `Olá ${row.pilot_name},\n\nSua inscrição para a etapa "${row.stage_name}" foi CONFIRMADA!\n\nPrepare sua moto e boa prova!\nEquipe Tamura Eventos`
-                    );
-                }
-            });
+            const regRes = await query(
+                `SELECT r.*, u.email, s.name as stage_name FROM registrations r JOIN users u ON r.user_id = u.id JOIN stages s ON r.stage_id = s.id WHERE r.id = $1`, 
+                [req.params.id]
+            );
+            const row = regRes.rows[0];
+            if (row && row.email) {
+                await sendEmail(
+                    row.email, 
+                    "Inscrição Confirmada - Tamura Eventos", 
+                    `Olá ${row.pilot_name},\n\nSua inscrição para a etapa "${row.stage_name}" foi CONFIRMADA!\n\nPrepare sua moto e boa prova!\nEquipe Tamura Eventos`
+                );
+            }
         }
-    });
+        res.json({ message: "Status atualizado!" });
+    } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // --- RESULTADOS ---
-app.get('/api/stages/:id/categories-status', (req, res) => { db.all(`SELECT DISTINCT category FROM results WHERE stage_id = ?`, [req.params.id], (err, rows) => { if (err) return res.status(500).json({ error: err.message }); res.json(rows.map(r => r.category)); }); });
-app.get('/api/stages/:id/results/:category', (req, res) => { db.all(`SELECT * FROM results WHERE stage_id = ? AND category = ? ORDER BY position ASC`, [req.params.id, req.params.category], (err, rows) => { if (err) return res.status(500).json({ error: err.message }); res.json(rows); }); });
-app.post('/api/stages/:id/upload/:category', authenticateToken, upload.single('file'), (req, res) => {
+app.get('/api/stages/:id/categories-status', async (req, res) => { 
+    try {
+        const result = await query(`SELECT DISTINCT category FROM results WHERE stage_id = $1`, [req.params.id]);
+        res.json(result.rows.map(r => r.category));
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/stages/:id/results/:category', async (req, res) => { 
+    try {
+        const result = await query(
+            `SELECT * FROM results WHERE stage_id = $1 AND category = $2 ORDER BY position ASC`, 
+            [req.params.id, req.params.category]
+        );
+        res.json(result.rows);
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/stages/:id/upload/:category', authenticateToken, upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: "Sem arquivo." });
+  const client = await pool.connect();
+  
   try {
     const workbook = xlsx.readFile(req.file.path);
     const sheet = workbook.Sheets[workbook.SheetNames[0]];
     const data = xlsx.utils.sheet_to_json(sheet, { header: 1, defval: "" });
+    
     const resultsToSave = [];
     let headerFound = false;
+    
     data.forEach((row) => {
-      if (!headerFound) { if (row[0] && (row[0].toString().trim() === 'P' || row[0].toString().trim() === 'Pos')) headerFound = true; return; }
+      if (!headerFound) { 
+          if (row[0] && (row[0].toString().trim() === 'P' || row[0].toString().trim() === 'Pos')) headerFound = true; 
+          return; 
+      }
       const pos = parseInt(row[0]);
       if (!isNaN(pos)) {
         resultsToSave.push({
@@ -400,25 +591,47 @@ app.post('/api/stages/:id/upload/:category', authenticateToken, upload.single('f
         });
       }
     });
-    db.serialize(() => {
-      db.run(`DELETE FROM results WHERE stage_id = ? AND category = ?`, [req.params.id, req.params.category]);
-      const stmt = db.prepare(`INSERT INTO results (stage_id, position, epc, pilot_number, pilot_name, category, laps, total_time, last_lap, diff_first, diff_prev, best_lap, avg_speed, points) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-      resultsToSave.forEach(r => { stmt.run(r.stage_id, r.position, r.epc, r.pilot_number, r.pilot_name, r.category, r.laps, r.total_time, r.last_lap, r.diff_first, r.diff_prev, r.best_lap, r.avg_speed, r.points); });
-      stmt.finalize();
-    });
-    fs.unlinkSync(req.file.path); res.json({ message: "OK!", data: resultsToSave });
-  } catch (error) { console.error(error); res.status(500).json({ error: "Erro." }); }
-});
-app.get('/api/standings/overall', (req, res) => { db.all(`SELECT pilot_name, pilot_number, category, SUM(points) as total_points FROM results GROUP BY pilot_number, category ORDER BY category ASC, total_points DESC`, [], (err, rows) => { if (err) return res.status(500).json({ error: err.message }); res.json(rows); }); });
 
-// *** ROTA CORRIGIDA PARA TRAZER DADOS COMPLETOS E ORDENAR POR POSIÇÃO ***
-app.get('/api/stages/:id/standings', (req, res) => { 
-    // USA SELECT * PARA PEGAR TUDO (Voltas, Tempo, Diff, Melhor Volta)
-    // E ORDENA PELA POSIÇÃO DE CHEGADA (position ASC)
-    db.all(`SELECT * FROM results WHERE stage_id = ? ORDER BY category ASC, position ASC`, [req.params.id], (err, rows) => { 
-        if (err) return res.status(500).json({ error: err.message }); 
-        res.json(rows); 
-    }); 
+    await client.query('BEGIN');
+    await client.query(`DELETE FROM results WHERE stage_id = $1 AND category = $2`, [req.params.id, req.params.category]);
+    
+    for (const r of resultsToSave) {
+        await client.query(
+            `INSERT INTO results (stage_id, position, epc, pilot_number, pilot_name, category, laps, total_time, last_lap, diff_first, diff_prev, best_lap, avg_speed, points) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+            [r.stage_id, r.position, r.epc, r.pilot_number, r.pilot_name, r.category, r.laps, r.total_time, r.last_lap, r.diff_first, r.diff_prev, r.best_lap, r.avg_speed, r.points]
+        );
+    }
+    await client.query('COMMIT');
+    
+    fs.unlinkSync(req.file.path); 
+    res.json({ message: "OK!", data: resultsToSave });
+  } catch (error) { 
+      await client.query('ROLLBACK');
+      console.error(error); 
+      res.status(500).json({ error: "Erro no processamento." }); 
+  } finally {
+      client.release();
+  }
+});
+
+app.get('/api/standings/overall', async (req, res) => { 
+    try {
+        const result = await query(
+            `SELECT pilot_name, pilot_number, category, SUM(points) as total_points FROM results GROUP BY pilot_number, pilot_name, category ORDER BY category ASC, total_points DESC`
+        );
+        res.json(result.rows);
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/stages/:id/standings', async (req, res) => { 
+    try {
+        const result = await query(
+            `SELECT * FROM results WHERE stage_id = $1 ORDER BY category ASC, position ASC`, 
+            [req.params.id]
+        );
+        res.json(result.rows); 
+    } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.listen(port, () => { console.log(`Server running at http://localhost:${port}`); });
