@@ -459,10 +459,29 @@ app.put('/api/users/:id', authenticateToken, async (req, res) => {
 });
 
 app.delete('/api/users/:id', authenticateToken, async (req, res) => {
+    const client = await pool.connect();
     try {
-        await query("DELETE FROM users WHERE id = $1", [req.params.id]);
+        // Inicia a transação
+        await client.query('BEGIN');
+        
+        // 1. Exclui todos os registros de inscrição vinculados ao usuário
+        await client.query("DELETE FROM registrations WHERE user_id = $1", [req.params.id]);
+        
+        // 2. Exclui o usuário
+        await client.query("DELETE FROM users WHERE id = $1", [req.params.id]);
+        
+        // Confirma a transação
+        await client.query('COMMIT');
         res.json({ message: "Excluído." });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+    } catch (err) { 
+        // Em caso de erro, desfaz as alterações
+        await client.query('ROLLBACK');
+        console.error("Erro ao deletar usuário e inscrições:", err);
+        res.status(500).json({ error: "Erro ao deletar usuário. Inscrições relacionadas foram preservadas." }); 
+    } finally {
+        // Libera a conexão
+        client.release();
+    }
 });
 
 // Preços por Etapa
