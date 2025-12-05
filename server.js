@@ -322,7 +322,7 @@ app.post('/forgot-password', async (req, res) => {
     }
 
     // Gera um token simples e data de expiração (1 hora)
-    const token = crypto.randomBytes(5).toString('hex');
+    const token = crypto.randomBytes(2).toString('hex');
     const now = new Date();
     now.setHours(now.getHours() + 1);
 
