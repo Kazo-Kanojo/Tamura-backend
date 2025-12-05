@@ -305,7 +305,82 @@ app.post('/login', async (req, res) => {
       res.json({ id: user.id, name: user.name, role: user.role, bike_number: user.bike_number, token });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
+// --- RECUPERAÇÃO DE SENHA ---
 
+// 1. Solicitar Recuperação (Envia Email com Token)
+app.post('/forgot-password', async (req, res) => {
+  const { email } = req.body;
+  if (!email) return res.status(400).json({ error: "Email é obrigatório." });
+
+  try {
+    const userResult = await query("SELECT * FROM users WHERE email = $1", [email]);
+    const user = userResult.rows[0];
+
+    if (!user) {
+      // Por segurança, não dizemos se o email existe ou não, mas aqui retornamos erro para facilitar
+      return res.status(404).json({ error: "Email não encontrado." });
+    }
+
+    // Gera um token simples e data de expiração (1 hora)
+    const token = crypto.randomBytes(8).toString('hex');
+    const now = new Date();
+    now.setHours(now.getHours() + 1);
+
+    await query(
+      "UPDATE users SET reset_token = $1, reset_expires = $2 WHERE id = $3",
+      [token, now, user.id]
+    );
+
+    // Envia o email
+    const mailOptions = {
+      to: user.email,
+      subject: 'Recuperação de Senha - Tamura Eventos',
+      text: `Você solicitou a recuperação de senha.\n\nUse o seguinte token para redefinir sua senha: ${token}\n\nSe você não solicitou isso, ignore este email.`
+    };
+
+    await sendEmail(mailOptions.to, mailOptions.subject, mailOptions.text);
+
+    res.json({ message: "Email enviado com sucesso!" });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Erro ao processar solicitação." });
+  }
+});
+
+// 2. Redefinir a Senha (Usa o Token)
+app.post('/reset-password', async (req, res) => {
+  const { token, newPassword } = req.body;
+  if (!token || !newPassword) return res.status(400).json({ error: "Token e nova senha são obrigatórios." });
+
+  try {
+    // Busca usuário com token válido e que não tenha expirado
+    const result = await query(
+      "SELECT * FROM users WHERE reset_token = $1 AND reset_expires > NOW()",
+      [token]
+    );
+    const user = result.rows[0];
+
+    if (!user) {
+      return res.status(400).json({ error: "Token inválido ou expirado." });
+    }
+
+    // Hash da nova senha
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    // Atualiza a senha e limpa o token
+    await query(
+      "UPDATE users SET password = $1, reset_token = NULL, reset_expires = NULL WHERE id = $2",
+      [hashedPassword, user.id]
+    );
+
+    res.json({ message: "Senha alterada com sucesso!" });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Erro ao redefinir senha." });
+  }
+});
 // Etapas
 app.get('/api/stages', async (req, res) => {
   try {
