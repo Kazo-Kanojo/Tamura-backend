@@ -510,7 +510,32 @@ app.put('/api/stages/:id/prices', authenticateToken, async (req, res) => {
         client.release();
     }
 });
+// --- ROTA DE CRIAR INSCRIÇÃO (Adicione esta parte) ---
+app.post('/api/registrations', authenticateToken, async (req, res) => {
+  const { user_id, stage_id, pilot_name, pilot_number, plan_name, categories, total_price } = req.body;
+  
+  // Garante que as categorias sejam salvas como texto (ex: "VX1, VX2")
+  const categoriesStr = Array.isArray(categories) ? categories.join(', ') : categories;
 
+  try {
+      const result = await query(
+          `INSERT INTO registrations (user_id, stage_id, pilot_name, pilot_number, plan_name, categories, total_price) 
+           VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+          [user_id, stage_id, pilot_name, pilot_number, plan_name, categoriesStr, total_price]
+      );
+      res.json({ message: "Inscrição realizada com sucesso!", id: result.rows[0].id });
+  } catch (err) {
+      console.error("Erro ao salvar inscrição:", err);
+      res.status(500).json({ error: "Erro ao processar inscrição." });
+  }
+});
+// Rota para o USUÁRIO ver suas próprias inscrições
+app.get('/api/registrations/user/:userId', authenticateToken, async (req, res) => {
+    try {
+        const result = await query("SELECT * FROM registrations WHERE user_id = $1 ORDER BY created_at DESC", [req.params.userId]);
+        res.json(result.rows);
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
 // Inscrições
 app.get('/api/registrations/stage/:stageId', authenticateToken, async (req, res) => {
     try {
