@@ -1,6 +1,6 @@
 require('dotenv').config();
 const express = require('express');
-const { Pool } = require('pg'); // Usa Postgres em vez de SQLite
+const { Pool } = require('pg');
 const cors = require('cors');
 const bodyParser = require('body-parser');
 const multer = require('multer');
@@ -14,6 +14,10 @@ const helmet = require('helmet');
 const nodemailer = require('nodemailer');
 const crypto = require('crypto');
 const dns = require('dns');
+
+// --- NOVAS IMPORTAÇÕES PARA O CLOUDINARY ---
+const cloudinary = require('cloudinary').v2;
+const { CloudinaryStorage } = require('multer-storage-cloudinary');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -60,18 +64,23 @@ app.use(helmet());
 app.use(helmet.crossOriginResourcePolicy({ policy: "cross-origin" })); 
 app.use(bodyParser.json());
 
-// Pasta temporária para uploads (Vercel usa /tmp para arquivos temporários)
-const uploadDir = process.env.VERCEL ? '/tmp' : 'uploads';
-if (!fs.existsSync(uploadDir) && !process.env.VERCEL) fs.mkdirSync(uploadDir);
-
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => { cb(null, uploadDir); },
-  filename: (req, file, cb) => { 
-      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9); 
-      cb(null, uniqueSuffix + path.extname(file.originalname)); 
-  }
+// --- CONFIGURAÇÃO DO CLOUDINARY ---
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET
 });
-const upload = multer({ storage });
+
+// --- CONFIGURAÇÃO DO MULTER COM CLOUDINARY STORAGE ---
+const storage = new CloudinaryStorage({
+  cloudinary: cloudinary,
+  params: {
+    folder: 'tamura-eventos', // Nome da pasta no Cloudinary
+    allowed_formats: ['jpg', 'png', 'jpeg', 'webp'],
+  },
+});
+
+const upload = multer({ storage: storage });
 
 function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization'];
@@ -226,7 +235,7 @@ const initDb = async () => {
   }
 };
 
-// Executa a inicialização ao iniciar (ou em cada request frio no serverless)
+// Executa a inicialização ao iniciar
 initDb();
 
 const getPointsByPosition = (position) => {
@@ -300,10 +309,10 @@ app.get('/api/stages', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// --- ROTA POST DE STAGES ATUALIZADA PARA CLOUDINARY ---
 app.post('/api/stages', authenticateToken, upload.single('image'), async (req, res) => {
-  // Nota: Uploads em Vercel são efêmeros. Em produção real, use S3/Cloudinary.
-  // Para este exemplo, salvamos o nome, mas o arquivo sumirá após o deploy.
-  const imageUrl = req.file ? `/uploads/${req.file.filename}` : null;
+  // O CloudinaryStorage coloca a URL da imagem em req.file.path
+  const imageUrl = req.file ? req.file.path : null;
   const client = await pool.connect();
   try {
       await client.query('BEGIN');
@@ -328,13 +337,15 @@ app.post('/api/stages', authenticateToken, upload.single('image'), async (req, r
   }
 });
 
+// --- ROTA PUT DE STAGES ATUALIZADA PARA CLOUDINARY ---
 app.put('/api/stages/:id', authenticateToken, upload.single('image'), async (req, res) => {
     let queryText = `UPDATE stages SET name = $1, location = $2, date = $3 WHERE id = $4`;
     let params = [req.body.name, req.body.location, req.body.date, req.params.id];
     
     if (req.file) { 
+        // Se enviou nova imagem, usa a URL do Cloudinary (req.file.path)
         queryText = `UPDATE stages SET name = $1, location = $2, date = $3, image_url = $4 WHERE id = $5`;
-        params = [req.body.name, req.body.location, req.body.date, `/uploads/${req.file.filename}`, req.params.id];
+        params = [req.body.name, req.body.location, req.body.date, req.file.path, req.params.id];
     }
     
     try {
@@ -455,7 +466,27 @@ app.post('/api/stages/:id/upload/:category', authenticateToken, upload.single('f
   const client = await pool.connect();
   
   try {
-    const workbook = xlsx.readFile(req.file.path);
+    // Para ler o arquivo enviado ao Cloudinary, precisaríamos baixá-lo ou usar o stream.
+    // Como xlsx.readFile espera um caminho local, e o arquivo pode não estar localmente persistido em serverless,
+    // o ideal para CSV/XLSX de resultados seria manter upload em memória ou usar stream.
+    // Mas para manter simples e compatível com CloudinaryStorage que já salva, vamos tentar ler do path se disponível,
+    // ou se o CloudinaryStorage não fornecer path local (ele fornece URL), teríamos que ajustar.
+    // NOTA: CloudinaryStorage é ótimo para imagens. Para arquivos de dados (Excel) que precisam ser processados imediatamente,
+    // o memoryStorage do multer seria melhor, mas aqui estamos usando uma configuração única.
+    
+    // Se o arquivo for salvo no Cloudinary, req.file.path será uma URL (http...).
+    // A biblioteca 'xlsx' pode não ler URL diretamente com readFile.
+    // Correção rápida para processamento de arquivo: Se for URL, baixar buffer.
+    
+    let workbook;
+    if (req.file.path.startsWith('http')) {
+        const response = await fetch(req.file.path);
+        const arrayBuffer = await response.arrayBuffer();
+        workbook = xlsx.read(new Uint8Array(arrayBuffer), { type: 'array' });
+    } else {
+        workbook = xlsx.readFile(req.file.path);
+    }
+
     const sheet = workbook.Sheets[workbook.SheetNames[0]];
     const data = xlsx.utils.sheet_to_json(sheet, { header: 1, defval: "" });
     
@@ -491,8 +522,6 @@ app.post('/api/stages/:id/upload/:category', authenticateToken, upload.single('f
     }
     await client.query('COMMIT');
     
-    // Tenta apagar o arquivo, mas não falha se não conseguir (ambiente serverless)
-    try { fs.unlinkSync(req.file.path); } catch(e) {}
     res.json({ message: "OK!", data: resultsToSave });
   } catch (error) { 
       await client.query('ROLLBACK');
