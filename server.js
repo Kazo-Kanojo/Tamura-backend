@@ -529,6 +529,55 @@ app.post('/api/registrations', authenticateToken, async (req, res) => {
       res.status(500).json({ error: "Erro ao processar inscrição." });
   }
 });
+// --- ROTA DE ATUALIZAR STATUS E ENVIAR EMAIL (Adicione isso) ---
+app.put('/api/registrations/:id/status', authenticateToken, async (req, res) => {
+  const { status } = req.body;
+  const { id } = req.params;
+
+  try {
+    // 1. Atualiza o status no banco
+    await query("UPDATE registrations SET status = $1 WHERE id = $2", [status, id]);
+
+    // 2. Se o status for alterado para 'paid' (pago), envia o e-mail
+    if (status === 'paid') {
+      // Busca os dados da inscrição e o e-mail do usuário
+      const regResult = await query(
+        `SELECT r.*, u.email, u.name as user_name 
+         FROM registrations r 
+         JOIN users u ON r.user_id = u.id 
+         WHERE r.id = $1`, 
+        [id]
+      );
+      
+      const reg = regResult.rows[0];
+
+      if (reg && reg.email) {
+        const subject = `Inscrição Confirmada - ${reg.pilot_name}`;
+        const text = `
+          Olá ${reg.user_name},
+          
+          O pagamento da sua inscrição foi confirmado!
+          
+          Evento: Tamura Eventos
+          Piloto: ${reg.pilot_name}
+          Moto: #${reg.pilot_number}
+          Categorias: ${reg.categories}
+          
+          Nos vemos na pista! 🏁
+        `;
+        
+        // Usa a função sendEmail que já existe no seu server.js
+        await sendEmail(reg.email, subject, text);
+        console.log(`Email de confirmação enviado para ${reg.email}`);
+      }
+    }
+
+    res.json({ message: "Status atualizado com sucesso!" });
+  } catch (err) {
+    console.error("Erro ao atualizar status:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
 // Rota para o USUÁRIO ver suas próprias inscrições
 app.get('/api/registrations/user/:userId', authenticateToken, async (req, res) => {
     try {
