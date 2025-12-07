@@ -639,33 +639,91 @@ app.post('/api/stages/:id/upload/:category', authenticateToken, uploadFile.singl
   const client = await pool.connect();
   
   try {
-    // Lê o arquivo Excel diretamente do buffer da memória
+    // 1. Ler o arquivo
     const workbook = xlsx.read(req.file.buffer, { type: 'buffer' });
-
     const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    // header: 1 garante que pegamos um array de arrays (linhas cruas)
     const data = xlsx.utils.sheet_to_json(sheet, { header: 1, defval: "" });
     
-    const resultsToSave = [];
-    let headerFound = false;
-    
-    data.forEach((row) => {
-      // Procura a linha de cabeçalho (começa com 'P' ou 'Pos')
-      if (!headerFound) { 
-          if (row[0] && (row[0].toString().trim() === 'P' || row[0].toString().trim() === 'Pos')) headerFound = true; 
-          return; 
+    // 2. Encontrar a linha de cabeçalho dinamicamente
+    let headerRowIndex = -1;
+    let colMap = {}; // Vai guardar: { 'pilot_name': indice, 'laps': indice ... }
+
+    // Lista de sinônimos para normalizar os nomes das colunas
+    const synonyms = {
+      'pos': 'position', 'p': 'position',
+      'epc': 'epc',
+      'nº': 'pilot_number', 'no': 'pilot_number', 'num': 'pilot_number',
+      'piloto': 'pilot_name', 'nome': 'pilot_name',
+      'v': 'laps', 'vlt': 'laps', 'voltas': 'laps',
+      'tempo corrido': 'race_time',
+      'tempo total': 'total_time',
+      'ultima volta': 'last_lap', 'última volta': 'last_lap',
+      'dif. primeiro': 'diff_first', 'dif primeiro': 'diff_first',
+      'dif. anterior': 'diff_prev', 'dif anterior': 'diff_prev',
+      'melhor volta': 'best_lap',
+      'v.m.': 'avg_speed', 'vm': 'avg_speed', 'velocidade': 'avg_speed'
+    };
+
+    // Varre as primeiras 30 linhas procurando o cabeçalho
+    for (let i = 0; i < Math.min(data.length, 30); i++) {
+      const row = data[i].map(cell => (cell ? cell.toString().trim().toLowerCase() : ''));
+      
+      // Se a linha tem "piloto" e "nº" (ou "no"), achamos o cabeçalho
+      if (row.includes('piloto') && (row.includes('nº') || row.includes('no') || row.includes('num'))) {
+        headerRowIndex = i;
+        
+        // Mapeia onde está cada coluna
+        row.forEach((colName, index) => {
+          if (synonyms[colName]) {
+            colMap[synonyms[colName]] = index;
+          }
+        });
+        break;
       }
-      const pos = parseInt(row[0]);
+    }
+
+    if (headerRowIndex === -1) {
+      throw new Error("Não foi possível encontrar o cabeçalho da tabela (procurei por 'Piloto' e 'Nº').");
+    }
+
+    const resultsToSave = [];
+
+    // 3. Processar os dados usando o mapa de colunas
+    for (let i = headerRowIndex + 1; i < data.length; i++) {
+      const row = data[i];
+      
+      // Pega a posição usando o mapa. Se não achou a coluna, tenta pegar pelo índice padrão antigo (fallback)
+      const getVal = (key, defaultIdx) => {
+        const idx = colMap[key];
+        return (idx !== undefined && row[idx] !== undefined) ? row[idx] : (row[defaultIdx] || '');
+      };
+
+      // Tenta ler a posição (Pos)
+      const rawPos = getVal('position', 0); // Padrão índice 0
+      const pos = parseInt(rawPos);
+
       if (!isNaN(pos)) {
         resultsToSave.push({
-          stage_id: req.params.id, position: pos, epc: row[2] || '', pilot_number: row[3] || '', pilot_name: row[4] || 'Desconhecido',
-          category: req.params.category, laps: row[8] || '', total_time: row[9] || '', last_lap: row[12] || '',
-          diff_first: row[13] || '', diff_prev: row[16] || '', best_lap: row[18] || '', 
-          avg_speed: row[24] || '', 
+          stage_id: req.params.id,
+          position: pos,
+          epc: getVal('epc', 2),
+          pilot_number: getVal('pilot_number', 3),
+          pilot_name: getVal('pilot_name', 4),
+          category: req.params.category, // Usa a categoria da URL
+          laps: getVal('laps', 8), // O índice 8 é o fallback se não achar "V" ou "Vlt"
+          total_time: getVal('total_time', 9),
+          last_lap: getVal('last_lap', 12),
+          diff_first: getVal('diff_first', 13),
+          diff_prev: getVal('diff_prev', 16),
+          best_lap: getVal('best_lap', 18),
+          avg_speed: getVal('avg_speed', 24),
           points: getPointsByPosition(pos)
         });
       }
-    });
+    }
 
+    // 4. Salvar no Banco (Mesma lógica anterior)
     await client.query('BEGIN');
     await client.query(`DELETE FROM results WHERE stage_id = $1 AND category = $2`, [req.params.id, req.params.category]);
     
@@ -678,11 +736,12 @@ app.post('/api/stages/:id/upload/:category', authenticateToken, uploadFile.singl
     }
     await client.query('COMMIT');
     
-    res.json({ message: "OK!", data: resultsToSave });
+    res.json({ message: "Importado com sucesso!", count: resultsToSave.length, data: resultsToSave });
+
   } catch (error) { 
       await client.query('ROLLBACK');
-      console.error(error); 
-      res.status(500).json({ error: "Erro no processamento." }); 
+      console.error("Erro no upload:", error); 
+      res.status(500).json({ error: "Erro no processamento: " + error.message }); 
   } finally {
       client.release();
   }
