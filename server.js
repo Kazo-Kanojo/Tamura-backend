@@ -82,7 +82,6 @@ const storageImages = new CloudinaryStorage({
 const uploadImage = multer({ storage: storageImages });
 
 // --- 2. CONFIGURAÇÃO DE UPLOAD PARA ARQUIVOS DE DADOS/EXCEL (MEMÓRIA) ---
-// Usamos memória para poder ler o buffer do Excel imediatamente sem salvar em disco/nuvem
 const storageFiles = multer.memoryStorage();
 const uploadFile = multer({ storage: storageFiles });
 
@@ -98,7 +97,6 @@ function authenticateToken(req, res, next) {
   });
 }
 
-// Helper para converter string vazia em NULL (Postgres requer isso para datas)
 const sanitize = (value) => (value === '' ? null : value);
 
 // =====================================================
@@ -107,7 +105,7 @@ const sanitize = (value) => (value === '' ? null : value);
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL || `postgresql://${process.env.PG_USER}:${process.env.PG_PASSWORD}@${process.env.PG_HOST}:${process.env.PG_PORT}/${process.env.PG_DATABASE}?sslmode=require`,
-  ssl: { rejectUnauthorized: false } // Necessário para Neon/Render
+  ssl: { rejectUnauthorized: false } 
 });
 
 const query = (text, params) => pool.query(text, params);
@@ -125,11 +123,9 @@ const DEFAULT_PLANS = [
 // Inicialização das Tabelas
 const initDb = async () => {
   try {
-    // Configurações
     await query(`CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)`);
     await query(`INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO NOTHING`, ['pix_key', '']);
 
-    // Usuários
     await query(`CREATE TABLE IF NOT EXISTS users (
       id SERIAL PRIMARY KEY, 
       name TEXT, 
@@ -145,18 +141,18 @@ const initDb = async () => {
       reset_expires TIMESTAMP
     )`);
 
-    // Etapas
+    // --- ATUALIZAÇÃO AQUI: Adicionado end_date ---
     await query(`CREATE TABLE IF NOT EXISTS stages (
       id SERIAL PRIMARY KEY, 
       name TEXT, 
       location TEXT, 
       date TEXT, 
+      end_date TEXT, 
       image_url TEXT, 
       status TEXT DEFAULT 'upcoming', 
       batch_name TEXT DEFAULT 'Lote Inicial'
     )`);
 
-    // Planos
     await query(`CREATE TABLE IF NOT EXISTS plans (
       id TEXT PRIMARY KEY, 
       name TEXT, 
@@ -166,7 +162,6 @@ const initDb = async () => {
       description TEXT
     )`);
 
-    // Insere planos padrão se não existirem
     const plansCount = await query("SELECT count(*) as count FROM plans");
     if (parseInt(plansCount.rows[0].count) === 0) {
       for (const plan of DEFAULT_PLANS) {
@@ -177,7 +172,6 @@ const initDb = async () => {
       }
     }
 
-    // Preços por Etapa
     await query(`CREATE TABLE IF NOT EXISTS stage_prices (
         stage_id INTEGER,
         plan_id TEXT,
@@ -187,7 +181,6 @@ const initDb = async () => {
         FOREIGN KEY(plan_id) REFERENCES plans(id)
     )`);
 
-    // Resultados
     await query(`CREATE TABLE IF NOT EXISTS results (
       id SERIAL PRIMARY KEY, 
       stage_id INTEGER, 
@@ -207,7 +200,6 @@ const initDb = async () => {
       FOREIGN KEY(stage_id) REFERENCES stages(id) ON DELETE CASCADE
     )`);
 
-    // Inscrições
     await query(`CREATE TABLE IF NOT EXISTS registrations (
       id SERIAL PRIMARY KEY, 
       user_id INTEGER, 
@@ -223,7 +215,6 @@ const initDb = async () => {
       FOREIGN KEY(stage_id) REFERENCES stages(id) ON DELETE CASCADE
     )`);
 
-    // Admin Padrão
     const adminEmail = '10tamura@gmail.com'; 
     const adminUser = await query("SELECT * FROM users WHERE email = $1", [adminEmail]);
     
@@ -240,7 +231,6 @@ const initDb = async () => {
   }
 };
 
-// Executa a inicialização ao iniciar
 initDb();
 
 const getPointsByPosition = (position) => {
@@ -305,9 +295,7 @@ app.post('/login', async (req, res) => {
       res.json({ id: user.id, name: user.name, role: user.role, bike_number: user.bike_number, token });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
-// --- RECUPERAÇÃO DE SENHA ---
 
-// 1. Solicitar Recuperação (Envia Email com Token)
 app.post('/forgot-password', async (req, res) => {
   const { email } = req.body;
   if (!email) return res.status(400).json({ error: "Email é obrigatório." });
@@ -317,11 +305,9 @@ app.post('/forgot-password', async (req, res) => {
     const user = userResult.rows[0];
 
     if (!user) {
-      // Por segurança, não dizemos se o email existe ou não, mas aqui retornamos erro para facilitar
       return res.status(404).json({ error: "Email não encontrado." });
     }
 
-    // Gera um token simples e data de expiração (1 hora)
     const token = crypto.randomBytes(2).toString('hex');
     const now = new Date();
     now.setHours(now.getHours() + 1);
@@ -331,7 +317,6 @@ app.post('/forgot-password', async (req, res) => {
       [token, now, user.id]
     );
 
-    // Envia o email
     const mailOptions = {
       to: user.email,
       subject: 'Recuperação de Senha - Tamura Eventos',
@@ -348,13 +333,11 @@ app.post('/forgot-password', async (req, res) => {
   }
 });
 
-// 2. Redefinir a Senha (Usa o Token)
 app.post('/reset-password', async (req, res) => {
   const { token, newPassword } = req.body;
   if (!token || !newPassword) return res.status(400).json({ error: "Token e nova senha são obrigatórios." });
 
   try {
-    // Busca usuário com token válido e que não tenha expirado
     const result = await query(
       "SELECT * FROM users WHERE reset_token = $1 AND reset_expires > NOW()",
       [token]
@@ -365,10 +348,8 @@ app.post('/reset-password', async (req, res) => {
       return res.status(400).json({ error: "Token inválido ou expirado." });
     }
 
-    // Hash da nova senha
     const hashedPassword = await bcrypt.hash(newPassword, 10);
 
-    // Atualiza a senha e limpa o token
     await query(
       "UPDATE users SET password = $1, reset_token = NULL, reset_expires = NULL WHERE id = $2",
       [hashedPassword, user.id]
@@ -381,6 +362,7 @@ app.post('/reset-password', async (req, res) => {
     res.status(500).json({ error: "Erro ao redefinir senha." });
   }
 });
+
 // Etapas
 app.get('/api/stages', async (req, res) => {
   try {
@@ -389,15 +371,16 @@ app.get('/api/stages', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// --- ROTA POST DE STAGES (Usa uploadImage) ---
+// --- ROTA POST DE STAGES (ATUALIZADA) ---
 app.post('/api/stages', authenticateToken, uploadImage.single('image'), async (req, res) => {
   const imageUrl = req.file ? req.file.path : null;
   const client = await pool.connect();
   try {
       await client.query('BEGIN');
+      // Adicionado end_date
       const insertRes = await client.query(
-          `INSERT INTO stages (name, location, date, image_url, batch_name) VALUES ($1, $2, $3, $4, 'Lote Inicial') RETURNING id`, 
-          [req.body.name, req.body.location, req.body.date, imageUrl]
+          `INSERT INTO stages (name, location, date, end_date, image_url, batch_name) VALUES ($1, $2, $3, $4, $5, 'Lote Inicial') RETURNING id`, 
+          [req.body.name, req.body.location, req.body.date, req.body.end_date, imageUrl]
       );
       const newStageId = insertRes.rows[0].id;
 
@@ -416,14 +399,15 @@ app.post('/api/stages', authenticateToken, uploadImage.single('image'), async (r
   }
 });
 
-// --- ROTA PUT DE STAGES (Usa uploadImage) ---
+// --- ROTA PUT DE STAGES (ATUALIZADA) ---
 app.put('/api/stages/:id', authenticateToken, uploadImage.single('image'), async (req, res) => {
-    let queryText = `UPDATE stages SET name = $1, location = $2, date = $3 WHERE id = $4`;
-    let params = [req.body.name, req.body.location, req.body.date, req.params.id];
+    // Adicionado end_date
+    let queryText = `UPDATE stages SET name = $1, location = $2, date = $3, end_date = $4 WHERE id = $5`;
+    let params = [req.body.name, req.body.location, req.body.date, req.body.end_date, req.params.id];
     
     if (req.file) { 
-        queryText = `UPDATE stages SET name = $1, location = $2, date = $3, image_url = $4 WHERE id = $5`;
-        params = [req.body.name, req.body.location, req.body.date, req.file.path, req.params.id];
+        queryText = `UPDATE stages SET name = $1, location = $2, date = $3, end_date = $4, image_url = $5 WHERE id = $6`;
+        params = [req.body.name, req.body.location, req.body.date, req.body.end_date, req.file.path, req.params.id];
     }
     
     try {
@@ -461,30 +445,20 @@ app.put('/api/users/:id', authenticateToken, async (req, res) => {
 app.delete('/api/users/:id', authenticateToken, async (req, res) => {
     const client = await pool.connect();
     try {
-        // Inicia a transação
         await client.query('BEGIN');
-        
-        // 1. Exclui todos os registros de inscrição vinculados ao usuário
         await client.query("DELETE FROM registrations WHERE user_id = $1", [req.params.id]);
-        
-        // 2. Exclui o usuário
         await client.query("DELETE FROM users WHERE id = $1", [req.params.id]);
-        
-        // Confirma a transação
         await client.query('COMMIT');
         res.json({ message: "Excluído." });
     } catch (err) { 
-        // Em caso de erro, desfaz as alterações
         await client.query('ROLLBACK');
         console.error("Erro ao deletar usuário e inscrições:", err);
         res.status(500).json({ error: "Erro ao deletar usuário. Inscrições relacionadas foram preservadas." }); 
     } finally {
-        // Libera a conexão
         client.release();
     }
 });
 
-// Preços por Etapa
 app.get('/api/stages/:id/prices', async (req, res) => {
     const stageId = req.params.id;
     const sql = `
@@ -529,14 +503,35 @@ app.put('/api/stages/:id/prices', authenticateToken, async (req, res) => {
         client.release();
     }
 });
-// --- ROTA DE CRIAR INSCRIÇÃO (Adicione esta parte) ---
+
+// --- ROTA DE CRIAR INSCRIÇÃO (COM TRAVA DE SEGURANÇA) ---
 app.post('/api/registrations', authenticateToken, async (req, res) => {
   const { user_id, stage_id, pilot_name, pilot_number, plan_name, categories, total_price } = req.body;
-  
-  // Garante que as categorias sejam salvas como texto (ex: "VX1, VX2")
   const categoriesStr = Array.isArray(categories) ? categories.join(', ') : categories;
 
   try {
+      // 1. VERIFICAÇÃO DE PRAZO (SEGURANÇA DO BACKEND)
+      const stageRes = await query("SELECT date, end_date FROM stages WHERE id = $1", [stage_id]);
+      const stage = stageRes.rows[0];
+
+      if (stage) {
+          // Define a data de encerramento (se não tiver end_date, usa date como base)
+          const eventEndDate = stage.end_date ? new Date(stage.end_date) : new Date(stage.date);
+          
+          // Adiciona 1 dia de tolerância (Dia seguinte ao evento)
+          eventEndDate.setDate(eventEndDate.getDate() + 1);
+          
+          // Define o horário limite para o fim desse dia de tolerância (23:59:59)
+          eventEndDate.setHours(23, 59, 59, 999);
+          
+          const now = new Date();
+
+          if (now > eventEndDate) {
+              return res.status(400).json({ error: "As inscrições para este evento já foram encerradas." });
+          }
+      }
+
+      // 2. INSERÇÃO NO BANCO
       const result = await query(
           `INSERT INTO registrations (user_id, stage_id, pilot_name, pilot_number, plan_name, categories, total_price) 
            VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
@@ -548,18 +543,15 @@ app.post('/api/registrations', authenticateToken, async (req, res) => {
       res.status(500).json({ error: "Erro ao processar inscrição." });
   }
 });
-// --- ROTA DE ATUALIZAR STATUS E ENVIAR EMAIL (Adicione isso) ---
+
 app.put('/api/registrations/:id/status', authenticateToken, async (req, res) => {
   const { status } = req.body;
   const { id } = req.params;
 
   try {
-    // 1. Atualiza o status no banco
     await query("UPDATE registrations SET status = $1 WHERE id = $2", [status, id]);
 
-    // 2. Se o status for alterado para 'paid' (pago), envia o e-mail
     if (status === 'paid') {
-      // Busca os dados da inscrição e o e-mail do usuário
       const regResult = await query(
         `SELECT r.*, u.email, u.name as user_name 
          FROM registrations r 
@@ -585,7 +577,6 @@ app.put('/api/registrations/:id/status', authenticateToken, async (req, res) => 
           Nos vemos na pista! 🏁
         `;
         
-        // Usa a função sendEmail que já existe no seu server.js
         await sendEmail(reg.email, subject, text);
         console.log(`Email de confirmação enviado para ${reg.email}`);
       }
@@ -597,14 +588,14 @@ app.put('/api/registrations/:id/status', authenticateToken, async (req, res) => 
     res.status(500).json({ error: err.message });
   }
 });
-// Rota para o USUÁRIO ver suas próprias inscrições
+
 app.get('/api/registrations/user/:userId', authenticateToken, async (req, res) => {
     try {
         const result = await query("SELECT * FROM registrations WHERE user_id = $1 ORDER BY created_at DESC", [req.params.userId]);
         res.json(result.rows);
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
-// Inscrições
+
 app.get('/api/registrations/stage/:stageId', authenticateToken, async (req, res) => {
     try {
         const result = await query(
@@ -633,23 +624,18 @@ app.get('/api/stages/:id/results/:category', async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// --- ROTA DE UPLOAD EXCEL (CORRIGIDA: Usa uploadFile e lê da memória) ---
 app.post('/api/stages/:id/upload/:category', authenticateToken, uploadFile.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: "Sem arquivo." });
   const client = await pool.connect();
   
   try {
-    // 1. Ler o arquivo
     const workbook = xlsx.read(req.file.buffer, { type: 'buffer' });
     const sheet = workbook.Sheets[workbook.SheetNames[0]];
-    // header: 1 garante que pegamos um array de arrays (linhas cruas)
     const data = xlsx.utils.sheet_to_json(sheet, { header: 1, defval: "" });
     
-    // 2. Encontrar a linha de cabeçalho dinamicamente
     let headerRowIndex = -1;
-    let colMap = {}; // Vai guardar: { 'pilot_name': indice, 'laps': indice ... }
+    let colMap = {}; 
 
-    // Lista de sinônimos para normalizar os nomes das colunas
     const synonyms = {
       'pos': 'position', 'p': 'position',
       'epc': 'epc',
@@ -665,15 +651,10 @@ app.post('/api/stages/:id/upload/:category', authenticateToken, uploadFile.singl
       'v.m.': 'avg_speed', 'vm': 'avg_speed', 'velocidade': 'avg_speed'
     };
 
-    // Varre as primeiras 30 linhas procurando o cabeçalho
     for (let i = 0; i < Math.min(data.length, 30); i++) {
       const row = data[i].map(cell => (cell ? cell.toString().trim().toLowerCase() : ''));
-      
-      // Se a linha tem "piloto" e "nº" (ou "no"), achamos o cabeçalho
       if (row.includes('piloto') && (row.includes('nº') || row.includes('no') || row.includes('num'))) {
         headerRowIndex = i;
-        
-        // Mapeia onde está cada coluna
         row.forEach((colName, index) => {
           if (synonyms[colName]) {
             colMap[synonyms[colName]] = index;
@@ -689,18 +670,14 @@ app.post('/api/stages/:id/upload/:category', authenticateToken, uploadFile.singl
 
     const resultsToSave = [];
 
-    // 3. Processar os dados usando o mapa de colunas
     for (let i = headerRowIndex + 1; i < data.length; i++) {
       const row = data[i];
-      
-      // Pega a posição usando o mapa. Se não achou a coluna, tenta pegar pelo índice padrão antigo (fallback)
       const getVal = (key, defaultIdx) => {
         const idx = colMap[key];
         return (idx !== undefined && row[idx] !== undefined) ? row[idx] : (row[defaultIdx] || '');
       };
 
-      // Tenta ler a posição (Pos)
-      const rawPos = getVal('position', 0); // Padrão índice 0
+      const rawPos = getVal('position', 0); 
       const pos = parseInt(rawPos);
 
       if (!isNaN(pos)) {
@@ -710,8 +687,8 @@ app.post('/api/stages/:id/upload/:category', authenticateToken, uploadFile.singl
           epc: getVal('epc', 2),
           pilot_number: getVal('pilot_number', 3),
           pilot_name: getVal('pilot_name', 4),
-          category: req.params.category, // Usa a categoria da URL
-          laps: getVal('laps', 8), // O índice 8 é o fallback se não achar "V" ou "Vlt"
+          category: req.params.category, 
+          laps: getVal('laps', 8), 
           total_time: getVal('total_time', 9),
           last_lap: getVal('last_lap', 12),
           diff_first: getVal('diff_first', 13),
@@ -723,7 +700,6 @@ app.post('/api/stages/:id/upload/:category', authenticateToken, uploadFile.singl
       }
     }
 
-    // 4. Salvar no Banco (Mesma lógica anterior)
     await client.query('BEGIN');
     await client.query(`DELETE FROM results WHERE stage_id = $1 AND category = $2`, [req.params.id, req.params.category]);
     
@@ -747,9 +723,6 @@ app.post('/api/stages/:id/upload/:category', authenticateToken, uploadFile.singl
   }
 });
 
-// --- NOVAS ROTAS PARA TABELA DE PONTUAÇÃO (CORREÇÃO ERRO 2) ---
-
-// 1. Classificação Geral do Campeonato (Soma de todas as etapas)
 app.get('/api/standings/overall', async (req, res) => {
     try {
         const result = await query(
@@ -764,7 +737,6 @@ app.get('/api/standings/overall', async (req, res) => {
     }
 });
 
-// 2. Classificação de uma Etapa Específica
 app.get('/api/stages/:id/standings', async (req, res) => {
     try {
         const result = await query(
@@ -780,5 +752,4 @@ app.get('/api/stages/:id/standings', async (req, res) => {
     }
 });
 
-// Importante: Exporta o app para o Vercel Serverless Function
 module.exports = app;
