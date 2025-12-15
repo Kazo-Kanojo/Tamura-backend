@@ -56,7 +56,7 @@ const sendEmail = async (to, subject, text) => {
 
 // Configuração de CORS - Adicione o domínio do seu frontend aqui
 app.use(cors({
-    origin: ['https://tamura-eventos.vercel.app', 'http://localhost:5173'], // Atualize com seu domínio frontend real
+    origin: ['https://tamura.esp.br', 'http://localhost:5173'], // Atualize com seu domínio frontend real
     credentials: true
 }));
 
