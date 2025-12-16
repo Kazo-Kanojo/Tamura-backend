@@ -292,7 +292,8 @@ app.post('/login', async (req, res) => {
       if (!isMatch) return res.status(401).json({ error: "Senha incorreta." });
       
       const token = jwt.sign({ id: user.id, role: user.role }, process.env.JWT_SECRET, { expiresIn: '24h' });
-      res.json({ id: user.id, name: user.name, role: user.role, bike_number: user.bike_number, token });
+      // CORREÇÃO AQUI: Adicionado chip_id para ser retornado no login
+      res.json({ id: user.id, name: user.name, role: user.role, bike_number: user.bike_number, chip_id: user.chip_id, token });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -429,6 +430,20 @@ app.get('/api/users', authenticateToken, async (req, res) => {
       const result = await query(`SELECT id, name, email, phone, cpf, bike_number, chip_id, role, birth_date FROM users ORDER BY name ASC`);
       res.json(result.rows);
   } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ROTA ADICIONADA: Usuário pode buscar seus próprios dados completos
+app.get('/api/me', authenticateToken, async (req, res) => {
+  try {
+      const result = await query(
+          `SELECT id, name, email, phone, cpf, bike_number, chip_id, role, birth_date FROM users WHERE id = $1`, 
+          [req.user.id] // req.user é populado pelo authenticateToken
+      );
+      if (result.rows.length === 0) return res.status(404).json({ error: "Usuário não encontrado." });
+      res.json(result.rows[0]);
+  } catch (err) { 
+      res.status(500).json({ error: err.message }); 
+  }
 });
 
 app.put('/api/users/:id', authenticateToken, async (req, res) => {
@@ -608,7 +623,7 @@ app.get('/api/registrations/stage/:stageId', authenticateToken, async (req, res)
 
 
 // =================================================================================
-// >>>>>>> NOVO BLOCO: ROTA DE CANCELAMENTO DE INSCRIÇÃO (CORRIGE O ERRO 404) <<<<<<<
+// ROTA DE CANCELAMENTO DE INSCRIÇÃO
 // =================================================================================
 
 app.delete('/api/registrations/:id', authenticateToken, async (req, res) => {
@@ -651,7 +666,7 @@ app.delete('/api/registrations/:id', authenticateToken, async (req, res) => {
 });
 
 // =================================================================================
-// >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> FIM DO NOVO BLOCO <<<<<<<<<<<<<<<<<<<<<<<<<<<<
+// FIM ROTA DE CANCELAMENTO DE INSCRIÇÃO
 // =================================================================================
 
 
