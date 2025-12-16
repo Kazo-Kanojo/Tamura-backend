@@ -458,6 +458,45 @@ app.delete('/api/users/:id', authenticateToken, async (req, res) => {
         client.release();
     }
 });
+// --- ROTA DE CANCELAMENTO DE INSCRIÇÃO (USUÁRIO E ADMIN) ---
+app.delete('/api/registrations/:id', authenticateToken, async (req, res) => {
+    const registrationId = req.params.id;
+    const userId = req.user.id; // ID do usuário autenticado pelo token
+
+    try {
+        // 1. Verificar se a inscrição existe e qual é o seu status/dono
+        const regResult = await query("SELECT user_id, status FROM registrations WHERE id = $1", [registrationId]);
+        const registration = regResult.rows[0];
+
+        if (!registration) {
+            return res.status(404).json({ error: "Inscrição não encontrada." });
+        }
+
+        const isOwner = registration.user_id === userId;
+        const isAdmin = req.user.role === 'admin';
+
+        // 2. Verificação de Permissão e Regra de Negócio
+        
+        // Deve ser o dono OU um administrador
+        if (!isOwner && !isAdmin) {
+            return res.status(403).json({ error: "Você não tem permissão para cancelar esta inscrição." });
+        }
+
+        // Se a inscrição estiver paga ('paid'), só o administrador pode cancelar/deletar
+        if (registration.status === 'paid' && !isAdmin) {
+             return res.status(400).json({ error: "Inscrições pagas só podem ser canceladas pelo administrador (para fins de reembolso)." });
+        }
+        
+        // 3. Deletar a inscrição
+        await query("DELETE FROM registrations WHERE id = $1", [registrationId]);
+        
+        res.json({ message: "Inscrição cancelada com sucesso. O piloto pode se inscrever novamente." });
+
+    } catch (err) {
+        console.error("Erro ao cancelar inscrição:", err);
+        res.status(500).json({ error: err.message });
+    }
+});
 
 app.get('/api/stages/:id/prices', async (req, res) => {
     const stageId = req.params.id;
