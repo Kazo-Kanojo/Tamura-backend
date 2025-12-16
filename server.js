@@ -458,45 +458,6 @@ app.delete('/api/users/:id', authenticateToken, async (req, res) => {
         client.release();
     }
 });
-// --- ROTA DE CANCELAMENTO DE INSCRIÇÃO (USUÁRIO E ADMIN) ---
-app.delete('/api/registrations/:id', authenticateToken, async (req, res) => {
-    const registrationId = req.params.id;
-    const userId = req.user.id; // ID do usuário autenticado pelo token
-
-    try {
-        // 1. Verificar se a inscrição existe e qual é o seu status/dono
-        const regResult = await query("SELECT user_id, status FROM registrations WHERE id = $1", [registrationId]);
-        const registration = regResult.rows[0];
-
-        if (!registration) {
-            return res.status(404).json({ error: "Inscrição não encontrada." });
-        }
-
-        const isOwner = registration.user_id === userId;
-        const isAdmin = req.user.role === 'admin';
-
-        // 2. Verificação de Permissão e Regra de Negócio
-        
-        // Deve ser o dono OU um administrador
-        if (!isOwner && !isAdmin) {
-            return res.status(403).json({ error: "Você não tem permissão para cancelar esta inscrição." });
-        }
-
-        // Se a inscrição estiver paga ('paid'), só o administrador pode cancelar/deletar
-        if (registration.status === 'paid' && !isAdmin) {
-             return res.status(400).json({ error: "Inscrições pagas só podem ser canceladas pelo administrador (para fins de reembolso)." });
-        }
-        
-        // 3. Deletar a inscrição
-        await query("DELETE FROM registrations WHERE id = $1", [registrationId]);
-        
-        res.json({ message: "Inscrição cancelada com sucesso. O piloto pode se inscrever novamente." });
-
-    } catch (err) {
-        console.error("Erro ao cancelar inscrição:", err);
-        res.status(500).json({ error: err.message });
-    }
-});
 
 app.get('/api/stages/:id/prices', async (req, res) => {
     const stageId = req.params.id;
@@ -645,6 +606,55 @@ app.get('/api/registrations/stage/:stageId', authenticateToken, async (req, res)
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+
+// =================================================================================
+// >>>>>>> NOVO BLOCO: ROTA DE CANCELAMENTO DE INSCRIÇÃO (CORRIGE O ERRO 404) <<<<<<<
+// =================================================================================
+
+app.delete('/api/registrations/:id', authenticateToken, async (req, res) => {
+    const registrationId = req.params.id;
+    const userId = req.user.id; // ID do usuário autenticado pelo token
+
+    try {
+        // 1. Verificar se a inscrição existe e qual é o seu status/dono
+        const regResult = await query("SELECT user_id, status FROM registrations WHERE id = $1", [registrationId]);
+        const registration = regResult.rows[0];
+
+        if (!registration) {
+            return res.status(404).json({ error: "Inscrição não encontrada." });
+        }
+
+        const isOwner = registration.user_id === userId;
+        const isAdmin = req.user.role === 'admin';
+
+        // 2. Verificação de Permissão e Regra de Negócio
+        
+        // Deve ser o dono OU um administrador
+        if (!isOwner && !isAdmin) {
+            return res.status(403).json({ error: "Você não tem permissão para cancelar esta inscrição." });
+        }
+
+        // Se a inscrição estiver paga ('paid'), só o administrador pode cancelar/deletar
+        if (registration.status === 'paid' && !isAdmin) {
+             return res.status(400).json({ error: "Inscrições pagas só podem ser canceladas pelo administrador (para fins de reembolso)." });
+        }
+        
+        // 3. Deletar a inscrição
+        await query("DELETE FROM registrations WHERE id = $1", [registrationId]);
+        
+        res.json({ message: "Inscrição cancelada com sucesso. O piloto pode se inscrever novamente." });
+
+    } catch (err) {
+        console.error("Erro ao cancelar inscrição:", err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// =================================================================================
+// >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> FIM DO NOVO BLOCO <<<<<<<<<<<<<<<<<<<<<<<<<<<<
+// =================================================================================
+
+
 app.get('/api/stages/:id/categories-status', async (req, res) => { 
     try {
         const result = await query(`SELECT DISTINCT category FROM results WHERE stage_id = $1`, [req.params.id]);
@@ -680,7 +690,7 @@ app.post('/api/stages/:id/upload/:category', authenticateToken, uploadFile.singl
       'epc': 'epc',
       'nº': 'pilot_number', 'no': 'pilot_number', 'num': 'pilot_number',
       'piloto': 'pilot_name', 'nome': 'pilot_name',
-      'v': 'laps', 'vlt': 'laps', 'voltas': 'laps',
+      'v': 'laps', 'vlt': 'laps', 'voltas': 'voltas',
       'tempo corrido': 'race_time',
       'tempo total': 'total_time',
       'ultima volta': 'last_lap', 'última volta': 'last_lap',
