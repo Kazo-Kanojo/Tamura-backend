@@ -816,4 +816,28 @@ app.get('/api/stages/:id/standings', async (req, res) => {
     }
 });
 
+// --- ROTA DE ATUALIZAÇÃO DE INSCRIÇÃO (ADMIN) ---
+// ADICIONADA: Permite que o admin edite categorias, número, nome e preço
+app.put('/api/registrations/:id', authenticateToken, async (req, res) => {
+  const { id } = req.params;
+  const { categories, pilot_number, total_price, pilot_name } = req.body;
+  
+  if (req.user.role !== 'admin') {
+      return res.status(403).json({ error: "Apenas administradores podem editar inscrições." });
+  }
+
+  try {
+      await query(
+          `UPDATE registrations 
+           SET categories = $1, pilot_number = $2, total_price = $3, pilot_name = $4 
+           WHERE id = $5`,
+          [categories, pilot_number, total_price, pilot_name, id]
+      );
+      res.json({ message: "Inscrição atualizada com sucesso!" });
+  } catch (err) {
+      console.error("Erro ao atualizar inscrição:", err);
+      res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = app;
