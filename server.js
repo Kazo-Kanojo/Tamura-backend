@@ -120,6 +120,14 @@ const DEFAULT_PLANS = [
   { id: 'full',       name: 'Full Pass',     price: 230, limit_cat: 99, allowed: null, description: 'Acesso total a todas as categorias' },
 ];
 
+const DEFAULT_CATEGORIES = [
+  "50cc", "65cc", "Feminino", "Free Force One", "Importada Amador","Junior", 
+  "Nacional Amador", "Open Importada", "Open Nacional", "Over 250", 
+  "Ultimate 250x230", "VX 250f Nacional", "VX230","VX1","VX2", 
+  "VX3 Importada", "VX3 Nacional", "VX4", "VX5", "VX6", "VX7",
+  "Taça importada","Taça nacional", "trilheiros"
+];
+
 // Inicialização das Tabelas
 const initDb = async () => {
   try {
@@ -141,7 +149,6 @@ const initDb = async () => {
       reset_expires TIMESTAMP
     )`);
 
-    // --- ATUALIZAÇÃO AQUI: Adicionado end_date ---
     await query(`CREATE TABLE IF NOT EXISTS stages (
       id SERIAL PRIMARY KEY, 
       name TEXT, 
@@ -170,6 +177,23 @@ const initDb = async () => {
           [plan.id, plan.name, plan.price, plan.limit_cat, plan.allowed, plan.description]
         );
       }
+    }
+
+    // --- NOVA TABELA DE CATEGORIAS ---
+    await query(`CREATE TABLE IF NOT EXISTS categories (
+      id SERIAL PRIMARY KEY, 
+      name TEXT UNIQUE NOT NULL
+    )`);
+
+    const catCount = await query("SELECT count(*) as count FROM categories");
+    if (parseInt(catCount.rows[0].count) === 0) {
+      for (const cat of DEFAULT_CATEGORIES) {
+        await query(
+          "INSERT INTO categories (name) VALUES ($1) ON CONFLICT (name) DO NOTHING",
+          [cat]
+        );
+      }
+      console.log("Categorias padrão inseridas.");
     }
 
     await query(`CREATE TABLE IF NOT EXISTS stage_prices (
@@ -292,7 +316,6 @@ app.post('/login', async (req, res) => {
       if (!isMatch) return res.status(401).json({ error: "Senha incorreta." });
       
       const token = jwt.sign({ id: user.id, role: user.role }, process.env.JWT_SECRET, { expiresIn: '24h' });
-      // CORREÇÃO AQUI: Adicionado chip_id para ser retornado no login
       res.json({ id: user.id, name: user.name, role: user.role, bike_number: user.bike_number, chip_id: user.chip_id, token });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -372,13 +395,11 @@ app.get('/api/stages', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// --- ROTA POST DE STAGES (ATUALIZADA) ---
 app.post('/api/stages', authenticateToken, uploadImage.single('image'), async (req, res) => {
   const imageUrl = req.file ? req.file.path : null;
   const client = await pool.connect();
   try {
       await client.query('BEGIN');
-      // Adicionado end_date
       const insertRes = await client.query(
           `INSERT INTO stages (name, location, date, end_date, image_url, batch_name) VALUES ($1, $2, $3, $4, $5, 'Lote Inicial') RETURNING id`, 
           [req.body.name, req.body.location, req.body.date, req.body.end_date, imageUrl]
@@ -400,9 +421,7 @@ app.post('/api/stages', authenticateToken, uploadImage.single('image'), async (r
   }
 });
 
-// --- ROTA PUT DE STAGES (ATUALIZADA) ---
 app.put('/api/stages/:id', authenticateToken, uploadImage.single('image'), async (req, res) => {
-    // Adicionado end_date
     let queryText = `UPDATE stages SET name = $1, location = $2, date = $3, end_date = $4 WHERE id = $5`;
     let params = [req.body.name, req.body.location, req.body.date, req.body.end_date, req.params.id];
     
@@ -432,12 +451,11 @@ app.get('/api/users', authenticateToken, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ROTA ADICIONADA: Usuário pode buscar seus próprios dados completos
 app.get('/api/me', authenticateToken, async (req, res) => {
   try {
       const result = await query(
           `SELECT id, name, email, phone, cpf, bike_number, chip_id, role, birth_date FROM users WHERE id = $1`, 
-          [req.user.id] // req.user é populado pelo authenticateToken
+          [req.user.id] 
       );
       if (result.rows.length === 0) return res.status(404).json({ error: "Usuário não encontrado." });
       res.json(result.rows[0]);
@@ -525,18 +543,12 @@ app.post('/api/registrations', authenticateToken, async (req, res) => {
   const categoriesStr = Array.isArray(categories) ? categories.join(', ') : categories;
 
   try {
-      // 1. VERIFICAÇÃO DE PRAZO (SEGURANÇA DO BACKEND)
       const stageRes = await query("SELECT date, end_date FROM stages WHERE id = $1", [stage_id]);
       const stage = stageRes.rows[0];
 
       if (stage) {
-          // Define a data de encerramento (se não tiver end_date, usa date como base)
           const eventEndDate = stage.end_date ? new Date(stage.end_date) : new Date(stage.date);
-          
-          // Adiciona 1 dia de tolerância (Dia seguinte ao evento)
           eventEndDate.setDate(eventEndDate.getDate() + 1);
-          
-          // Define o horário limite para o fim desse dia de tolerância (23:59:59)
           eventEndDate.setHours(23, 59, 59, 999);
           
           const now = new Date();
@@ -546,7 +558,6 @@ app.post('/api/registrations', authenticateToken, async (req, res) => {
           }
       }
 
-      // 2. INSERÇÃO NO BANCO
       const result = await query(
           `INSERT INTO registrations (user_id, stage_id, pilot_name, pilot_number, plan_name, categories, total_price) 
            VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
@@ -622,16 +633,11 @@ app.get('/api/registrations/stage/:stageId', authenticateToken, async (req, res)
 });
 
 
-// =================================================================================
-// ROTA DE CANCELAMENTO DE INSCRIÇÃO
-// =================================================================================
-
 app.delete('/api/registrations/:id', authenticateToken, async (req, res) => {
     const registrationId = req.params.id;
-    const userId = req.user.id; // ID do usuário autenticado pelo token
+    const userId = req.user.id; 
 
     try {
-        // 1. Verificar se a inscrição existe e qual é o seu status/dono
         const regResult = await query("SELECT user_id, status FROM registrations WHERE id = $1", [registrationId]);
         const registration = regResult.rows[0];
 
@@ -642,19 +648,14 @@ app.delete('/api/registrations/:id', authenticateToken, async (req, res) => {
         const isOwner = registration.user_id === userId;
         const isAdmin = req.user.role === 'admin';
 
-        // 2. Verificação de Permissão e Regra de Negócio
-        
-        // Deve ser o dono OU um administrador
         if (!isOwner && !isAdmin) {
             return res.status(403).json({ error: "Você não tem permissão para cancelar esta inscrição." });
         }
 
-        // Se a inscrição estiver paga ('paid'), só o administrador pode cancelar/deletar
         if (registration.status === 'paid' && !isAdmin) {
              return res.status(400).json({ error: "Inscrições pagas só podem ser canceladas pelo administrador (para fins de reembolso)." });
         }
         
-        // 3. Deletar a inscrição
         await query("DELETE FROM registrations WHERE id = $1", [registrationId]);
         
         res.json({ message: "Inscrição cancelada com sucesso. O piloto pode se inscrever novamente." });
@@ -664,10 +665,6 @@ app.delete('/api/registrations/:id', authenticateToken, async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
-
-// =================================================================================
-// FIM ROTA DE CANCELAMENTO DE INSCRIÇÃO
-// =================================================================================
 
 
 app.get('/api/stages/:id/categories-status', async (req, res) => { 
@@ -816,8 +813,6 @@ app.get('/api/stages/:id/standings', async (req, res) => {
     }
 });
 
-// --- ROTA DE ATUALIZAÇÃO DE INSCRIÇÃO (ADMIN) ---
-// ADICIONADA: Permite que o admin edite categorias, número, nome e preço
 app.put('/api/registrations/:id', authenticateToken, async (req, res) => {
   const { id } = req.params;
   const { categories, pilot_number, total_price, pilot_name } = req.body;
@@ -838,6 +833,55 @@ app.put('/api/registrations/:id', authenticateToken, async (req, res) => {
       console.error("Erro ao atualizar inscrição:", err);
       res.status(500).json({ error: err.message });
   }
+});
+
+
+// =====================================================
+// ROTAS DE CATEGORIAS (CRUD)
+// =====================================================
+
+app.get('/api/categories', async (req, res) => {
+    try {
+        const result = await query("SELECT * FROM categories ORDER BY name ASC");
+        res.json(result.rows);
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/categories', authenticateToken, async (req, res) => {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: "Acesso negado." });
+    
+    const { name } = req.body;
+    if (!name) return res.status(400).json({ error: "Nome é obrigatório." });
+
+    try {
+        const result = await query(
+            "INSERT INTO categories (name) VALUES ($1) RETURNING *", 
+            [name]
+        );
+        res.json(result.rows[0]);
+    } catch (err) {
+        if (err.code === '23505') return res.status(400).json({ error: "Categoria já existe." });
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.put('/api/categories/:id', authenticateToken, async (req, res) => {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: "Acesso negado." });
+
+    const { name } = req.body;
+    try {
+        await query("UPDATE categories SET name = $1 WHERE id = $2", [name, req.params.id]);
+        res.json({ message: "Categoria atualizada!" });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/categories/:id', authenticateToken, async (req, res) => {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: "Acesso negado." });
+
+    try {
+        await query("DELETE FROM categories WHERE id = $1", [req.params.id]);
+        res.json({ message: "Categoria removida!" });
+    } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 module.exports = app;
