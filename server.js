@@ -625,7 +625,11 @@ app.get('/api/registrations/user/:userId', authenticateToken, async (req, res) =
 app.get('/api/registrations/stage/:stageId', authenticateToken, async (req, res) => {
     try {
         const result = await query(
-            `SELECT r.*, u.phone, u.cpf, u.email FROM registrations r LEFT JOIN users u ON r.user_id = u.id WHERE r.stage_id = $1 ORDER BY r.pilot_name ASC`, 
+            `SELECT r.*, u.phone, u.cpf, u.email, u.birth_date, u.name as user_real_name 
+             FROM registrations r 
+             LEFT JOIN users u ON r.user_id = u.id 
+             WHERE r.stage_id = $1 
+             ORDER BY r.pilot_name ASC`, 
             [req.params.stageId]
         );
         res.json(result.rows);
