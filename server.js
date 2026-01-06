@@ -492,6 +492,38 @@ app.get('/api/me', authenticateToken, async (req, res) => {
   }
 });
 
+// Rota SEGURA para buscar um utilizador específico
+app.get('/api/users/:id', authenticateToken, async (req, res) => {
+  try {
+      // 1. Convertemos os IDs para números para garantir a comparação correta
+      const requestingUserId = parseInt(req.user.id); // ID de quem está logado
+      const targetUserId = parseInt(req.params.id);   // ID que se está a tentar aceder
+      const userRole = req.user.role;                 // Role (admin ou user)
+
+      // 2. TRAVA DE SEGURANÇA (IDOR)
+      // Se não for o dono da conta E não for admin, bloqueia.
+      if (requestingUserId !== targetUserId && userRole !== 'admin') {
+          return res.status(403).json({ error: "Acesso negado. Você não pode ver dados de outro utilizador." });
+      }
+      
+      const result = await query(
+          `SELECT id, name, email, phone, cpf, rg, medical_insurance, 
+                  team, emergency_phone, address, bike_number, chip_id, 
+                  role, birth_date 
+           FROM users WHERE id = $1`, 
+          [req.params.id] 
+      );
+
+      if (result.rows.length === 0) {
+        return res.status(404).json({ error: "Utilizador não encontrado." });
+      }
+
+      res.json(result.rows[0]);
+  } catch (err) { 
+      res.status(500).json({ error: err.message }); 
+  }
+});
+
 app.put('/api/users/:id', authenticateToken, async (req, res) => {
     const { name, email, phone, rg, medical_insurance, team, emergency_phone, bike_number, chip_id, role, birth_date } = req.body;
     try {
