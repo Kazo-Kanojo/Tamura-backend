@@ -291,15 +291,28 @@ app.put('/api/settings/:key', authenticateToken, async (req, res) => {
 
 // Auth
 app.post('/register', async (req, res) => {
-  const { name, email, phone, cpf, rg, medical_insurance, team, emergency_phone, bike_number, password, birth_date } = req.body;
-  if (!name || !email || !cpf || !password) return res.status(400).json({ error: "Campos obrigatórios faltando." });
+  const { name, email, phone, cpf, rg, medical_insurance, team, emergency_phone, address, bike_number, password, birth_date } = req.body;
+  if (!name || !email || phone || !cpf || !password || !rg || !address || !bike_number || !birth_date) return res.status(400).json({ error: "Campos obrigatórios faltando." });
 
   try {
       const hashedPassword = await bcrypt.hash(password, 10);
       const result = await query(
-        `INSERT INTO users (name, email, phone, cpf, rg, medical_insurance, team, emergency_phone, bike_number, password, role, birth_date) 
+        `INSERT INTO users (name, email, phone, cpf, rg, medical_insurance, team, emergency_phone, address, bike_number, password, role, birth_date) 
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'user', $11) RETURNING id`, 
-        [name, email, phone, cpf, rg, medical_insurance, team, emergency_phone, bike_number, hashedPassword, sanitize(birth_date)]
+        [
+          name, 
+          email, 
+          phone, 
+          cpf, 
+          rg,                // sanitize torna opcional no DB
+          medical_insurance, // sanitize torna opcional no DB
+          sanitize(team),              // sanitize torna opcional no DB
+          emergency_phone,    // sanitize torna opcional no DB
+          address,           // sanitize torna opcional no DB
+          sanitize(bike_number), 
+          hashedPassword, 
+          birth_date
+        ]
       );
       res.json({ message: "Sucesso!", userId: result.rows[0].id });
   } catch (err) {
