@@ -474,7 +474,8 @@ app.delete('/api/stages/:id', authenticateToken, async (req, res) => {
 // Users
 app.get('/api/users', authenticateToken, async (req, res) => {
   try {
-      const result = await query(`SELECT id, name, email, phone, cpf, bike_number, chip_id, role, birth_date FROM users ORDER BY name ASC`);
+      // Adicionamos: rg, medical_insurance, team, emergency_phone, address
+      const result = await query(`SELECT id, name, email, phone, cpf, rg, medical_insurance, team, emergency_phone, address, bike_number, chip_id, role, birth_date FROM users ORDER BY name ASC`);
       res.json(result.rows);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -495,16 +496,17 @@ app.get('/api/me', authenticateToken, async (req, res) => {
 // Rota SEGURA para buscar um utilizador específico
 app.get('/api/users/:id', authenticateToken, async (req, res) => {
   try {
-      const requestingUserId = parseInt(req.user.id); // Quem está pedindo
-      const targetUserId = parseInt(req.params.id);   // De quem são os dados
-      const userRole = req.user.role;
+      // 1. Convertemos os IDs para números para garantir a comparação correta
+      const requestingUserId = parseInt(req.user.id); // ID de quem está logado
+      const targetUserId = parseInt(req.params.id);   // ID que se está a tentar aceder
+      const userRole = req.user.role;                 // Role (admin ou user)
 
-      // SEGURANÇA: Bloqueia se tentar ver dados de outro piloto (e não for admin)
+      // 2. TRAVA DE SEGURANÇA (IDOR)
+      // Se não for o dono da conta E não for admin, bloqueia.
       if (requestingUserId !== targetUserId && userRole !== 'admin') {
-          return res.status(403).json({ error: "Acesso negado." });
+          return res.status(403).json({ error: "Acesso negado. Você não pode ver dados de outro utilizador." });
       }
-
-      // Busca completa incluindo 'address'
+      
       const result = await query(
           `SELECT id, name, email, phone, cpf, rg, medical_insurance, 
                   team, emergency_phone, address, bike_number, chip_id, 
@@ -513,7 +515,10 @@ app.get('/api/users/:id', authenticateToken, async (req, res) => {
           [req.params.id] 
       );
 
-      if (result.rows.length === 0) return res.status(404).json({ error: "Usuário não encontrado." });
+      if (result.rows.length === 0) {
+        return res.status(404).json({ error: "Utilizador não encontrado." });
+      }
+
       res.json(result.rows[0]);
   } catch (err) { 
       res.status(500).json({ error: err.message }); 
