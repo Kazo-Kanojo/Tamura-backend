@@ -723,9 +723,10 @@ app.get('/api/registrations/stage/:stageId', authenticateToken, async (req, res)
                 u.medical_insurance,
                 u.team,
                 u.emergency_phone, 
+                u.address,
                 u.email, 
                 u.birth_date, 
-                u.chip_id -- Adicionado para puxar o chip do usuário
+                u.chip_id 
              FROM registrations r 
              LEFT JOIN users u ON r.user_id = u.id 
              WHERE r.stage_id = $1 
@@ -735,7 +736,6 @@ app.get('/api/registrations/stage/:stageId', authenticateToken, async (req, res)
         res.json(result.rows);
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
-
 
 app.delete('/api/registrations/:id', authenticateToken, async (req, res) => {
     const registrationId = req.params.id;
