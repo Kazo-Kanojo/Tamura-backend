@@ -495,17 +495,16 @@ app.get('/api/me', authenticateToken, async (req, res) => {
 // Rota SEGURA para buscar um utilizador específico
 app.get('/api/users/:id', authenticateToken, async (req, res) => {
   try {
-      // 1. Convertemos os IDs para números para garantir a comparação correta
-      const requestingUserId = parseInt(req.user.id); // ID de quem está logado
-      const targetUserId = parseInt(req.params.id);   // ID que se está a tentar aceder
-      const userRole = req.user.role;                 // Role (admin ou user)
+      const requestingUserId = parseInt(req.user.id); // Quem está pedindo
+      const targetUserId = parseInt(req.params.id);   // De quem são os dados
+      const userRole = req.user.role;
 
-      // 2. TRAVA DE SEGURANÇA (IDOR)
-      // Se não for o dono da conta E não for admin, bloqueia.
+      // SEGURANÇA: Bloqueia se tentar ver dados de outro piloto (e não for admin)
       if (requestingUserId !== targetUserId && userRole !== 'admin') {
-          return res.status(403).json({ error: "Acesso negado. Você não pode ver dados de outro utilizador." });
+          return res.status(403).json({ error: "Acesso negado." });
       }
-      
+
+      // Busca completa incluindo 'address'
       const result = await query(
           `SELECT id, name, email, phone, cpf, rg, medical_insurance, 
                   team, emergency_phone, address, bike_number, chip_id, 
@@ -514,26 +513,57 @@ app.get('/api/users/:id', authenticateToken, async (req, res) => {
           [req.params.id] 
       );
 
-      if (result.rows.length === 0) {
-        return res.status(404).json({ error: "Utilizador não encontrado." });
-      }
-
+      if (result.rows.length === 0) return res.status(404).json({ error: "Usuário não encontrado." });
       res.json(result.rows[0]);
   } catch (err) { 
       res.status(500).json({ error: err.message }); 
   }
 });
 
+// --- ATUALIZADO: Rota para atualizar os dados ---
 app.put('/api/users/:id', authenticateToken, async (req, res) => {
-    const { name, email, phone, rg, medical_insurance, team, emergency_phone, bike_number, chip_id, role, birth_date } = req.body;
+    // 1. Adicionamos 'address' na recepção dos dados
+    const { 
+        name, email, phone, rg, medical_insurance, 
+        team, emergency_phone, address, bike_number, 
+        chip_id, role, birth_date 
+    } = req.body;
+    
+    // Trava de segurança simples: Apenas admin pode alterar o 'role' para admin
+    // (impede que um usuário comum vire admin editando o payload)
+    if (req.user.role !== 'admin' && role === 'admin' && req.user.role !== role) {
+         return res.status(403).json({ error: "Operação não permitida." });
+    }
+
     try {
+        // 2. Atualizamos o SQL para incluir 'address = $8' e reajustamos os índices
         await query(
-            `UPDATE users SET name = $1, email = $2, phone = $3, rg = $4, medical_insurance = $5, 
-             team = $6, emergency_phone = $7, bike_number = $8, chip_id = $9, role = $10, birth_date = $11 WHERE id = $12`, 
-            [name, email, phone, rg, medical_insurance, team, emergency_phone, bike_number, chip_id, role, sanitize(birth_date), req.params.id]
+            `UPDATE users SET 
+                name = $1, email = $2, phone = $3, rg = $4, medical_insurance = $5, 
+                team = $6, emergency_phone = $7, address = $8, bike_number = $9, 
+                chip_id = $10, role = $11, birth_date = $12 
+             WHERE id = $13`, 
+            [
+                name, 
+                email, 
+                phone, 
+                sanitize(rg), 
+                sanitize(medical_insurance), 
+                sanitize(team), 
+                sanitize(emergency_phone), 
+                sanitize(address), // <--- Campo Novo
+                bike_number, 
+                chip_id, 
+                role, 
+                sanitize(birth_date), 
+                req.params.id // $13
+            ]
         );
-        res.json({ message: "Atualizado!" });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+        res.json({ message: "Dados atualizados com sucesso!" });
+    } catch (err) { 
+        console.error("Erro ao atualizar usuário:", err);
+        res.status(500).json({ error: "Erro ao atualizar dados." }); 
+    }
 });
 
 app.delete('/api/users/:id', authenticateToken, async (req, res) => {
