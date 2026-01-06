@@ -525,23 +525,20 @@ app.get('/api/users/:id', authenticateToken, async (req, res) => {
   }
 });
 
-// --- ATUALIZADO: Rota para atualizar os dados ---
+// --- Rota para ATUALIZAR usuário (Admin ou Próprio) ---
 app.put('/api/users/:id', authenticateToken, async (req, res) => {
-    // 1. Adicionamos 'address' na recepção dos dados
     const { 
         name, email, phone, rg, medical_insurance, 
         team, emergency_phone, address, bike_number, 
         chip_id, role, birth_date 
     } = req.body;
     
-    // Trava de segurança simples: Apenas admin pode alterar o 'role' para admin
-    // (impede que um usuário comum vire admin editando o payload)
+    // Trava de segurança para Roles: Impede que um usuário comum vire admin sozinho
     if (req.user.role !== 'admin' && role === 'admin' && req.user.role !== role) {
          return res.status(403).json({ error: "Operação não permitida." });
     }
 
     try {
-        // 2. Atualizamos o SQL para incluir 'address = $8' e reajustamos os índices
         await query(
             `UPDATE users SET 
                 name = $1, email = $2, phone = $3, rg = $4, medical_insurance = $5, 
@@ -556,19 +553,16 @@ app.put('/api/users/:id', authenticateToken, async (req, res) => {
                 sanitize(medical_insurance), 
                 sanitize(team), 
                 sanitize(emergency_phone), 
-                sanitize(address), // <--- Campo Novo
+                sanitize(address), // <--- CAMPO NOVO ADICIONADO
                 bike_number, 
                 chip_id, 
                 role, 
                 sanitize(birth_date), 
-                req.params.id // $13
+                req.params.id
             ]
         );
-        res.json({ message: "Dados atualizados com sucesso!" });
-    } catch (err) { 
-        console.error("Erro ao atualizar usuário:", err);
-        res.status(500).json({ error: "Erro ao atualizar dados." }); 
-    }
+        res.json({ message: "Atualizado!" });
+    } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.delete('/api/users/:id', authenticateToken, async (req, res) => {
