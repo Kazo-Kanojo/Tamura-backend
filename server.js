@@ -140,6 +140,10 @@ const initDb = async () => {
       email TEXT UNIQUE, 
       phone TEXT, 
       cpf TEXT UNIQUE, 
+      rg TEXT,
+      medical_insurance TEXT,
+      team TEXT,
+      emergency_phone TEXT,
       bike_number TEXT, 
       chip_id TEXT, 
       password TEXT, 
@@ -287,15 +291,15 @@ app.put('/api/settings/:key', authenticateToken, async (req, res) => {
 
 // Auth
 app.post('/register', async (req, res) => {
-  const { name, email, phone, cpf, bike_number, password, birth_date } = req.body;
+  const { name, email, phone, cpf, rg, medical_insurance, team, emergency_phone, bike_number, password, birth_date } = req.body;
   if (!name || !email || !cpf || !password) return res.status(400).json({ error: "Campos obrigatórios faltando." });
 
   try {
       const hashedPassword = await bcrypt.hash(password, 10);
       const result = await query(
-        `INSERT INTO users (name, email, phone, cpf, bike_number, password, role, birth_date) 
-         VALUES ($1, $2, $3, $4, $5, $6, 'user', $7) RETURNING id`, 
-        [name, email, phone, cpf, bike_number, hashedPassword, sanitize(birth_date)]
+        `INSERT INTO users (name, email, phone, cpf, rg, medical_insurance, team, emergency_phone, bike_number, password, role, birth_date) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'user', $11) RETURNING id`, 
+        [name, email, phone, cpf, rg, medical_insurance, team, emergency_phone, bike_number, hashedPassword, sanitize(birth_date)]
       );
       res.json({ message: "Sucesso!", userId: result.rows[0].id });
   } catch (err) {
@@ -465,11 +469,12 @@ app.get('/api/me', authenticateToken, async (req, res) => {
 });
 
 app.put('/api/users/:id', authenticateToken, async (req, res) => {
-    const { name, email, phone, bike_number, chip_id, role, birth_date } = req.body;
+    const { name, email, phone, rg, medical_insurance, team, emergency_phone, bike_number, chip_id, role, birth_date } = req.body;
     try {
         await query(
-            `UPDATE users SET name = $1, email = $2, phone = $3, bike_number = $4, chip_id = $5, role = $6, birth_date = $7 WHERE id = $8`, 
-            [name, email, phone, bike_number, chip_id, role, sanitize(birth_date), req.params.id]
+            `UPDATE users SET name = $1, email = $2, phone = $3, rg = $4, medical_insurance = $5, 
+             team = $6, emergency_phone = $7, bike_number = $8, chip_id = $9, role = $10, birth_date = $11 WHERE id = $12`, 
+            [name, email, phone, rg, medical_insurance, team, emergency_phone, bike_number, chip_id, role, sanitize(birth_date), req.params.id]
         );
         res.json({ message: "Atualizado!" });
     } catch (err) { res.status(500).json({ error: err.message }); }
@@ -628,7 +633,11 @@ app.get('/api/registrations/stage/:stageId', authenticateToken, async (req, res)
             `SELECT 
                 r.*, 
                 u.phone, 
-                u.cpf, 
+                u.cpf,
+                u.rg,
+                u.medical_insurance,
+                u.team,
+                u.emergency_phone, 
                 u.email, 
                 u.birth_date, 
                 u.chip_id -- Adicionado para puxar o chip do usuário
@@ -893,5 +902,8 @@ app.delete('/api/categories/:id', authenticateToken, async (req, res) => {
         res.json({ message: "Categoria removida!" });
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
+
+
+
 
 module.exports = app;
