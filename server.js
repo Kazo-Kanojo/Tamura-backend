@@ -104,8 +104,11 @@ const sanitize = (value) => (value === '' ? null : value);
 // =====================================================
 
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL || `postgresql://${process.env.PG_USER}:${process.env.PG_PASSWORD}@${process.env.PG_HOST}:${process.env.PG_PORT}/${process.env.PG_DATABASE}?sslmode=require`,
-  ssl: { rejectUnauthorized: false } 
+  connectionString: process.env.DATABASE_URL, // Certifique-se que esta URL é a versão "Pooled" do Neon
+  ssl: { rejectUnauthorized: false },
+  max: 1, // Importante: No serverless, limite para 1 conexão por lambda para não estourar o banco
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 2000, // Falha rápido se o banco não responder
 });
 
 const query = (text, params) => pool.query(text, params);
@@ -129,137 +132,137 @@ const DEFAULT_CATEGORIES = [
 ];
 
 // Inicialização das Tabelas
-const initDb = async () => {
-  try {
-    await query(`CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)`);
-    await query(`INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO NOTHING`, ['pix_key', '']);
+// const initDb = async () => {
+//   try {
+//     await query(`CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)`);
+//     await query(`INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO NOTHING`, ['pix_key', '']);
 
-    await query(`CREATE TABLE IF NOT EXISTS users (
-      id SERIAL PRIMARY KEY, 
-      name TEXT, 
-      email TEXT UNIQUE, 
-      phone TEXT, 
-      cpf TEXT UNIQUE, 
-      rg TEXT,
-      medical_insurance TEXT,
-      team TEXT,
-      emergency_phone TEXT,
-      bike_number TEXT, 
-      chip_id TEXT, 
-      password TEXT, 
-      role TEXT DEFAULT 'user', 
-      birth_date DATE,
-      reset_token TEXT, 
-      reset_expires TIMESTAMP
-    )`);
+//     await query(`CREATE TABLE IF NOT EXISTS users (
+//       id SERIAL PRIMARY KEY, 
+//       name TEXT, 
+//       email TEXT UNIQUE, 
+//       phone TEXT, 
+//       cpf TEXT UNIQUE, 
+//       rg TEXT,
+//       medical_insurance TEXT,
+//       team TEXT,
+//       emergency_phone TEXT,
+//       bike_number TEXT, 
+//       chip_id TEXT, 
+//       password TEXT, 
+//       role TEXT DEFAULT 'user', 
+//       birth_date DATE,
+//       reset_token TEXT, 
+//       reset_expires TIMESTAMP
+//     )`);
 
-    await query(`CREATE TABLE IF NOT EXISTS stages (
-      id SERIAL PRIMARY KEY, 
-      name TEXT, 
-      location TEXT, 
-      date TEXT, 
-      end_date TEXT, 
-      image_url TEXT, 
-      status TEXT DEFAULT 'upcoming', 
-      batch_name TEXT DEFAULT 'Lote Inicial'
-    )`);
+//     await query(`CREATE TABLE IF NOT EXISTS stages (
+//       id SERIAL PRIMARY KEY, 
+//       name TEXT, 
+//       location TEXT, 
+//       date TEXT, 
+//       end_date TEXT, 
+//       image_url TEXT, 
+//       status TEXT DEFAULT 'upcoming', 
+//       batch_name TEXT DEFAULT 'Lote Inicial'
+//     )`);
 
-    await query(`CREATE TABLE IF NOT EXISTS plans (
-      id TEXT PRIMARY KEY, 
-      name TEXT, 
-      price REAL, 
-      limit_cat INTEGER, 
-      allowed TEXT, 
-      description TEXT
-    )`);
+//     await query(`CREATE TABLE IF NOT EXISTS plans (
+//       id TEXT PRIMARY KEY, 
+//       name TEXT, 
+//       price REAL, 
+//       limit_cat INTEGER, 
+//       allowed TEXT, 
+//       description TEXT
+//     )`);
 
-    const plansCount = await query("SELECT count(*) as count FROM plans");
-    if (parseInt(plansCount.rows[0].count) === 0) {
-      for (const plan of DEFAULT_PLANS) {
-        await query(
-          "INSERT INTO plans (id, name, price, limit_cat, allowed, description) VALUES ($1, $2, $3, $4, $5, $6)",
-          [plan.id, plan.name, plan.price, plan.limit_cat, plan.allowed, plan.description]
-        );
-      }
-    }
+//     const plansCount = await query("SELECT count(*) as count FROM plans");
+//     if (parseInt(plansCount.rows[0].count) === 0) {
+//       for (const plan of DEFAULT_PLANS) {
+//         await query(
+//           "INSERT INTO plans (id, name, price, limit_cat, allowed, description) VALUES ($1, $2, $3, $4, $5, $6)",
+//           [plan.id, plan.name, plan.price, plan.limit_cat, plan.allowed, plan.description]
+//         );
+//       }
+//     }
 
-    // --- NOVA TABELA DE CATEGORIAS ---
-    await query(`CREATE TABLE IF NOT EXISTS categories (
-      id SERIAL PRIMARY KEY, 
-      name TEXT UNIQUE NOT NULL
-    )`);
+//     // --- NOVA TABELA DE CATEGORIAS ---
+//     await query(`CREATE TABLE IF NOT EXISTS categories (
+//       id SERIAL PRIMARY KEY, 
+//       name TEXT UNIQUE NOT NULL
+//     )`);
 
-    const catCount = await query("SELECT count(*) as count FROM categories");
-    if (parseInt(catCount.rows[0].count) === 0) {
-      for (const cat of DEFAULT_CATEGORIES) {
-        await query(
-          "INSERT INTO categories (name) VALUES ($1) ON CONFLICT (name) DO NOTHING",
-          [cat]
-        );
-      }
-      console.log("Categorias padrão inseridas.");
-    }
+//     const catCount = await query("SELECT count(*) as count FROM categories");
+//     if (parseInt(catCount.rows[0].count) === 0) {
+//       for (const cat of DEFAULT_CATEGORIES) {
+//         await query(
+//           "INSERT INTO categories (name) VALUES ($1) ON CONFLICT (name) DO NOTHING",
+//           [cat]
+//         );
+//       }
+//       console.log("Categorias padrão inseridas.");
+//     }
 
-    await query(`CREATE TABLE IF NOT EXISTS stage_prices (
-        stage_id INTEGER,
-        plan_id TEXT,
-        price REAL,
-        PRIMARY KEY (stage_id, plan_id),
-        FOREIGN KEY(stage_id) REFERENCES stages(id) ON DELETE CASCADE,
-        FOREIGN KEY(plan_id) REFERENCES plans(id)
-    )`);
+//     await query(`CREATE TABLE IF NOT EXISTS stage_prices (
+//         stage_id INTEGER,
+//         plan_id TEXT,
+//         price REAL,
+//         PRIMARY KEY (stage_id, plan_id),
+//         FOREIGN KEY(stage_id) REFERENCES stages(id) ON DELETE CASCADE,
+//         FOREIGN KEY(plan_id) REFERENCES plans(id)
+//     )`);
 
-    await query(`CREATE TABLE IF NOT EXISTS results (
-      id SERIAL PRIMARY KEY, 
-      stage_id INTEGER, 
-      position INTEGER, 
-      epc TEXT, 
-      pilot_number TEXT, 
-      pilot_name TEXT, 
-      category TEXT, 
-      laps TEXT, 
-      total_time TEXT, 
-      last_lap TEXT, 
-      diff_first TEXT, 
-      diff_prev TEXT, 
-      best_lap TEXT, 
-      avg_speed TEXT, 
-      points INTEGER, 
-      FOREIGN KEY(stage_id) REFERENCES stages(id) ON DELETE CASCADE
-    )`);
+//     await query(`CREATE TABLE IF NOT EXISTS results (
+//       id SERIAL PRIMARY KEY, 
+//       stage_id INTEGER, 
+//       position INTEGER, 
+//       epc TEXT, 
+//       pilot_number TEXT, 
+//       pilot_name TEXT, 
+//       category TEXT, 
+//       laps TEXT, 
+//       total_time TEXT, 
+//       last_lap TEXT, 
+//       diff_first TEXT, 
+//       diff_prev TEXT, 
+//       best_lap TEXT, 
+//       avg_speed TEXT, 
+//       points INTEGER, 
+//       FOREIGN KEY(stage_id) REFERENCES stages(id) ON DELETE CASCADE
+//     )`);
 
-    await query(`CREATE TABLE IF NOT EXISTS registrations (
-      id SERIAL PRIMARY KEY, 
-      user_id INTEGER, 
-      stage_id INTEGER, 
-      pilot_name TEXT, 
-      pilot_number TEXT, 
-      plan_name TEXT, 
-      categories TEXT, 
-      total_price REAL, 
-      status TEXT DEFAULT 'pending', 
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, 
-      FOREIGN KEY(user_id) REFERENCES users(id), 
-      FOREIGN KEY(stage_id) REFERENCES stages(id) ON DELETE CASCADE
-    )`);
+//     await query(`CREATE TABLE IF NOT EXISTS registrations (
+//       id SERIAL PRIMARY KEY, 
+//       user_id INTEGER, 
+//       stage_id INTEGER, 
+//       pilot_name TEXT, 
+//       pilot_number TEXT, 
+//       plan_name TEXT, 
+//       categories TEXT, 
+//       total_price REAL, 
+//       status TEXT DEFAULT 'pending', 
+//       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, 
+//       FOREIGN KEY(user_id) REFERENCES users(id), 
+//       FOREIGN KEY(stage_id) REFERENCES stages(id) ON DELETE CASCADE
+//     )`);
 
-    const adminEmail = '10tamura@gmail.com'; 
-    const adminUser = await query("SELECT * FROM users WHERE email = $1", [adminEmail]);
+//     const adminEmail = '10tamura@gmail.com'; 
+//     const adminUser = await query("SELECT * FROM users WHERE email = $1", [adminEmail]);
     
-    if (adminUser.rows.length === 0) {
-      const hashedPassword = bcrypt.hashSync('1234', 10);
-      await query(
-        `INSERT INTO users (name, email, phone, cpf, bike_number, password, role) VALUES ($1, $2, $3, $4, $5, $6, 'admin')`,
-        ['Admin Tamura', adminEmail, '999999999', '00000000000', '00', hashedPassword]
-      );
-      console.log("Admin padrão criado.");
-    }
-  } catch (err) {
-    console.error("Erro ao inicializar DB:", err);
-  }
-};
+//     if (adminUser.rows.length === 0) {
+//       const hashedPassword = bcrypt.hashSync('1234', 10);
+//       await query(
+//         `INSERT INTO users (name, email, phone, cpf, bike_number, password, role) VALUES ($1, $2, $3, $4, $5, $6, 'admin')`,
+//         ['Admin Tamura', adminEmail, '999999999', '00000000000', '00', hashedPassword]
+//       );
+//       console.log("Admin padrão criado.");
+//     }
+//   } catch (err) {
+//     console.error("Erro ao inicializar DB:", err);
+//   }
+// };
 
-initDb();
+// initDb();
 
 const getPointsByPosition = (position) => {
   const pointsMap = { 1: 25, 2: 22, 3: 20, 4: 18, 5: 16, 6: 15, 7: 14, 8: 13, 9: 12, 10: 11, 11: 10, 12: 9, 13: 8, 14: 7, 15: 6, 16: 5, 17: 4, 18: 3, 19: 2, 20: 1 };
