@@ -56,9 +56,29 @@ const sendEmail = async (to, subject, text) => {
 
 // Configuração de CORS - Adicione o domínio do seu frontend aqui
 app.use(cors({
-    origin: ['https://tamura.esp.br', 'http://localhost:5173'], // Atualize com seu domínio frontend real
-    credentials: true
+    origin: function (origin, callback) {
+        // Permite requisições sem origin (como apps mobile ou curl)
+        if (!origin) return callback(null, true);
+        
+        const allowedOrigins = [
+            'https://tamura.esp.br', 
+            'https://www.tamura.esp.br', // Adicione com WWW por segurança
+            'http://localhost:5173'
+        ];
+        
+        if (allowedOrigins.indexOf(origin) !== -1) {
+            callback(null, true);
+        } else {
+            callback(new Error('Not allowed by CORS'));
+        }
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
 }));
+
+// Responder explicitamente a requisições OPTIONS (Preflight)
+app.options('*', cors());
 
 app.use(helmet());
 app.use(helmet.crossOriginResourcePolicy({ policy: "cross-origin" })); 
