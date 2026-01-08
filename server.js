@@ -77,8 +77,7 @@ app.use(cors({
     allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-// Responder explicitamente a requisições OPTIONS (Preflight)
-app.options('*', cors());
+
 
 app.use(helmet());
 app.use(helmet.crossOriginResourcePolicy({ policy: "cross-origin" })); 
