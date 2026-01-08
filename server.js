@@ -124,11 +124,12 @@ const sanitize = (value) => (value === '' ? null : value);
 // =====================================================
 
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL, // Certifique-se que esta URL é a versão "Pooled" do Neon
+  connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false },
-  max: 1, // Importante: No serverless, limite para 1 conexão por lambda para não estourar o banco
+  max: 1, 
   idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 2000, // Falha rápido se o banco não responder
+  // Aumente o timeout para 10 ou 15 segundos para dar tempo do banco acordar
+  connectionTimeoutMillis: 15000, 
 });
 
 const query = (text, params) => pool.query(text, params);
