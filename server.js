@@ -523,50 +523,6 @@ app.get('/api/me', authenticateToken, async (req, res) => {
   }
 });
 
-// Rota SEGURA para buscar um utilizador específico
-app.put('/api/users/:id', authenticateToken, async (req, res) => {
-    const { 
-        name, email, phone, rg, medical_insurance, 
-        team, emergency_phone, address, bike_number, 
-        chip_id, role, birth_date, 
-        modeloMoto // <--- Variável CamelCase vinda do React
-    } = req.body;
-    
-    // Segurança para não deixar user virar admin
-    if (req.user.role !== 'admin' && role === 'admin' && req.user.role !== role) {
-         return res.status(403).json({ error: "Operação não permitida." });
-    }
-
-    try {
-        await query(
-            // SQL: Novamente, no banco chamamos de modelo_moto
-            `UPDATE users SET 
-                name = $1, email = $2, phone = $3, rg = $4, medical_insurance = $5, 
-                team = $6, emergency_phone = $7, address = $8, bike_number = $9, 
-                chip_id = $10, role = $11, birth_date = $12, 
-                modelo_moto = $13 
-             WHERE id = $14`, 
-            [
-                name, 
-                email, 
-                phone, 
-                sanitize(rg), 
-                sanitize(medical_insurance), 
-                sanitize(team), 
-                sanitize(emergency_phone), 
-                sanitize(address), 
-                bike_number, 
-                chip_id, 
-                role, 
-                sanitize(birth_date), 
-                sanitize(modeloMoto), // <--- Valor CamelCase
-                req.params.id
-            ]
-        );
-        res.json({ message: "Atualizado!" });
-    } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
 // --- Rota para ATUALIZAR usuário (Admin ou Próprio) ---
 app.put('/api/users/:id', authenticateToken, async (req, res) => {
     const { 
@@ -1001,5 +957,3 @@ app.delete('/api/categories/:id', authenticateToken, async (req, res) => {
 app.listen(port, () => {
   console.log(`Tamura API Rodando na porta ${port}`);
 });
-
-module.exports = app;
