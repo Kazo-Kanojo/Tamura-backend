@@ -974,6 +974,8 @@ app.delete('/api/categories/:id', authenticateToken, async (req, res) => {
 });
 
 
-
+app.listen(port, () => {
+  console.log(`Tamura API Rodando na porta ${port}`);
+});
 
 module.exports = app;
