@@ -25,12 +25,7 @@ const port = process.env.PORT || 3000;
 // =====================================================
 // 1. CONFIGURAÇÕES
 // =====================================================
-app.use(cors({
-  origin: 'https://tamura.esp.br', // Permite apenas o seu frontend da Vercel
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true
-}));
+
 
 
 // Helper de DNS para evitar erros de envio de email em ambientes serverless
@@ -62,20 +57,22 @@ const sendEmail = async (to, subject, text) => {
 };
 
 // Configuração de CORS - Adicione o domínio do seu frontend aqui
+const allowedOrigins = [
+    'https://tamura.esp.br', 
+    'https://www.tamura.esp.br',
+    'http://localhost:5173'
+];
+
 app.use(cors({
     origin: function (origin, callback) {
-        // Permite requisições sem origin (como apps mobile ou curl)
+        // Permite requisições sem origin (como ferramentas de teste ou mobile)
         if (!origin) return callback(null, true);
-        
-        const allowedOrigins = [
-            'https://tamura.esp.br', 
-            'https://www.tamura.esp.br', // Adicione com WWW por segurança
-            'http://localhost:5173'
-        ];
         
         if (allowedOrigins.indexOf(origin) !== -1) {
             callback(null, true);
         } else {
+            // Log para você saber qual domínio está sendo bloqueado se o erro persistir
+            console.log("Domínio bloqueado pelo CORS:", origin);
             callback(new Error('Not allowed by CORS'));
         }
     },
