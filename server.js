@@ -25,6 +25,13 @@ const port = process.env.PORT || 3000;
 // =====================================================
 // 1. CONFIGURAÇÕES
 // =====================================================
+app.use(cors({
+  origin: 'https://tamura.esp.br', // Permite apenas o seu frontend da Vercel
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true
+}));
+
 
 // Helper de DNS para evitar erros de envio de email em ambientes serverless
 const customLookup = (hostname, options, callback) => {
