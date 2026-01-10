@@ -510,6 +510,30 @@ app.get('/api/users', authenticateToken, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+app.get('/api/users/:id', authenticateToken, async (req, res) => {
+  try {
+      const requestingUserId = parseInt(req.user.id);
+      const targetUserId = parseInt(req.params.id);
+      const userRole = req.user.role;
+
+      // Segurança: Apenas o próprio usuário ou admin pode ver os detalhes
+      if (requestingUserId !== targetUserId && userRole !== 'admin') {
+          return res.status(403).json({ error: "Acesso negado." });
+      }
+      
+      const result = await query(
+          `SELECT id, name, email, phone, cpf, rg, medical_insurance, 
+                  team, emergency_phone, address, bike_number, chip_id, 
+                  role, birth_date, modelo_moto
+           FROM users WHERE id = $1`, 
+          [req.params.id] 
+      );
+      
+      if (result.rows.length === 0) return res.status(404).json({ error: "Usuário não encontrado." });
+      
+      res.json(result.rows[0]);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
 app.get('/api/me', authenticateToken, async (req, res) => {
   try {
       const result = await query(
