@@ -314,14 +314,14 @@ app.put('/api/settings/:key', authenticateToken, async (req, res) => {
 
 // Auth
 app.post('/register', async (req, res) => {
-  // 1. Adicionamos 'address' na recepção dos dados
+  // Adicione modeloMoto na desestruturação
   const { 
     name, email, phone, cpf, rg, medical_insurance, 
-    team, emergency_phone, address, bike_number, password, birth_date 
+    team, emergency_phone, address, bike_number, password, birth_date, modeloMoto 
   } = req.body;
 
   // 2. Mantemos apenas o ESSENCIAL como obrigatório para evitar o erro 400
-  if (!name || !email || !cpf || !password) {
+if (!name || !email || !cpf || !password) {
     return res.status(400).json({ error: "Nome, Email, CPF e Senha são obrigatórios." });
   }
 
@@ -330,22 +330,13 @@ app.post('/register', async (req, res) => {
       const result = await query(
         `INSERT INTO users (
           name, email, phone, cpf, rg, medical_insurance, 
-          team, emergency_phone, address, bike_number, password, role, birth_date
+          team, emergency_phone, address, bike_number, password, role, birth_date, modelo_moto
          ) 
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'user', $12) RETURNING id`, 
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'user', $12, $13) RETURNING id`, 
         [
-          name, 
-          email, 
-          phone, 
-          cpf, 
-          sanitize(rg), 
-          sanitize(medical_insurance), 
-          sanitize(team), 
-          sanitize(emergency_phone), 
-          sanitize(address), // Agora o endereço será salvo
-          bike_number, 
-          hashedPassword, 
-          sanitize(birth_date)
+          name, email, phone, cpf, sanitize(rg), sanitize(medical_insurance), 
+          sanitize(team), sanitize(emergency_phone), sanitize(address), 
+          bike_number, hashedPassword, sanitize(birth_date), sanitize(modeloMoto) // <--- Adicionado
         ]
       );
       res.json({ message: "Sucesso!", userId: result.rows[0].id });
@@ -553,7 +544,7 @@ app.put('/api/users/:id', authenticateToken, async (req, res) => {
     const { 
         name, email, phone, rg, medical_insurance, 
         team, emergency_phone, address, bike_number, 
-        chip_id, role, birth_date 
+        chip_id, role, birth_date, modeloMoto
     } = req.body;
     
     // Trava de segurança para Roles: Impede que um usuário comum vire admin sozinho
@@ -566,43 +557,17 @@ app.put('/api/users/:id', authenticateToken, async (req, res) => {
             `UPDATE users SET 
                 name = $1, email = $2, phone = $3, rg = $4, medical_insurance = $5, 
                 team = $6, emergency_phone = $7, address = $8, bike_number = $9, 
-                chip_id = $10, role = $11, birth_date = $12 
-             WHERE id = $13`, 
+                chip_id = $10, role = $11, birth_date = $12, modelo_moto = $13
+             WHERE id = $14`, 
             [
-                name, 
-                email, 
-                phone, 
-                sanitize(rg), 
-                sanitize(medical_insurance), 
-                sanitize(team), 
-                sanitize(emergency_phone), 
-                sanitize(address), // <--- CAMPO NOVO ADICIONADO
-                bike_number, 
-                chip_id, 
-                role, 
-                sanitize(birth_date), 
+                name, email, phone, sanitize(rg), sanitize(medical_insurance), 
+                sanitize(team), sanitize(emergency_phone), sanitize(address), 
+                bike_number, chip_id, role, sanitize(birth_date), sanitize(modeloMoto), 
                 req.params.id
             ]
         );
         res.json({ message: "Atualizado!" });
     } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.delete('/api/users/:id', authenticateToken, async (req, res) => {
-    const client = await pool.connect();
-    try {
-        await client.query('BEGIN');
-        await client.query("DELETE FROM registrations WHERE user_id = $1", [req.params.id]);
-        await client.query("DELETE FROM users WHERE id = $1", [req.params.id]);
-        await client.query('COMMIT');
-        res.json({ message: "Excluído." });
-    } catch (err) { 
-        await client.query('ROLLBACK');
-        console.error("Erro ao deletar usuário e inscrições:", err);
-        res.status(500).json({ error: "Erro ao deletar usuário. Inscrições relacionadas foram preservadas." }); 
-    } finally {
-        client.release();
-    }
 });
 
 app.get('/api/stages/:id/prices', async (req, res) => {
@@ -740,16 +705,9 @@ app.get('/api/registrations/stage/:stageId', authenticateToken, async (req, res)
         const result = await query(
             `SELECT 
                 r.*, 
-                u.phone, 
-                u.cpf,
-                u.rg,
-                u.medical_insurance,
-                u.team,
-                u.emergency_phone, 
-                u.address,
-                u.email, 
-                u.birth_date, 
-                u.chip_id 
+                u.phone, u.cpf, u.rg, u.medical_insurance, u.team,
+                u.emergency_phone, u.address, u.email, u.birth_date, u.chip_id,
+                u.modelo_moto  -- <--- IMPORTANTE: Adicionei isso aqui para o PDF pegar
              FROM registrations r 
              LEFT JOIN users u ON r.user_id = u.id 
              WHERE r.stage_id = $1 
