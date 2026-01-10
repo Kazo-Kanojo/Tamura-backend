@@ -334,7 +334,7 @@ if (!name || !email || !cpf || !password) {
       const result = await query(
         `INSERT INTO users (
           name, email, phone, cpf, rg, medical_insurance, 
-          team, emergency_phone, address, bike_number, password, role, birth_date, modeloMoto
+          team, emergency_phone, address, bike_number, password, role, birth_date, modelo_moto
          ) 
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'user', $12, $13) RETURNING id`, 
         [
@@ -561,7 +561,7 @@ app.put('/api/users/:id', authenticateToken, async (req, res) => {
             `UPDATE users SET 
                 name = $1, email = $2, phone = $3, rg = $4, medical_insurance = $5, 
                 team = $6, emergency_phone = $7, address = $8, bike_number = $9, 
-                chip_id = $10, role = $11, birth_date = $12, modeloMoto = $13
+                chip_id = $10, role = $11, birth_date = $12, modelo_moto = $13
              WHERE id = $14`, 
             [
                 name, email, phone, sanitize(rg), sanitize(medical_insurance), 
@@ -711,7 +711,7 @@ app.get('/api/registrations/stage/:stageId', authenticateToken, async (req, res)
                 r.*, 
                 u.phone, u.cpf, u.rg, u.medical_insurance, u.team,
                 u.emergency_phone, u.address, u.email, u.birth_date, u.chip_id,
-                u.modeloMoto  -- <--- IMPORTANTE: Adicionei isso aqui para o PDF pegar
+                u.modelo_moto  -- <--- IMPORTANTE: Adicionei isso aqui para o PDF pegar
              FROM registrations r 
              LEFT JOIN users u ON r.user_id = u.id 
              WHERE r.stage_id = $1 
