@@ -318,29 +318,41 @@ app.put('/api/settings/:key', authenticateToken, async (req, res) => {
 
 // Auth
 app.post('/register', async (req, res) => {
-  // Adicione modeloMoto na desestruturação
+  // Recebe do Frontend em CamelCase (padrão JS)
   const { 
     name, email, phone, cpf, rg, medical_insurance, 
-    team, emergency_phone, address, bike_number, password, birth_date, modeloMoto 
+    team, emergency_phone, address, bike_number, password, birth_date, 
+    modeloMoto // <--- Sua variável aqui
   } = req.body;
 
-  // 2. Mantemos apenas o ESSENCIAL como obrigatório para evitar o erro 400
-if (!name || !email || !cpf || !password) {
+  if (!name || !email || !cpf || !password) {
     return res.status(400).json({ error: "Nome, Email, CPF e Senha são obrigatórios." });
   }
 
   try {
       const hashedPassword = await bcrypt.hash(password, 10);
       const result = await query(
+        // SQL: AQUI PRECISA SER modelo_moto (Snake Case) PARA O BANCO ACEITAR
         `INSERT INTO users (
           name, email, phone, cpf, rg, medical_insurance, 
-          team, emergency_phone, address, bike_number, password, role, birth_date, modelo_moto
+          team, emergency_phone, address, bike_number, password, role, birth_date, 
+          modelo_moto 
          ) 
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'user', $12, $13) RETURNING id`, 
         [
-          name, email, phone, cpf, sanitize(rg), sanitize(medical_insurance), 
-          sanitize(team), sanitize(emergency_phone), sanitize(address), 
-          bike_number, hashedPassword, sanitize(birth_date), sanitize(modeloMoto) // <--- Adicionado
+          name, 
+          email, 
+          phone, 
+          cpf, 
+          sanitize(rg), 
+          sanitize(medical_insurance), 
+          sanitize(team), 
+          sanitize(emergency_phone), 
+          sanitize(address), 
+          bike_number, 
+          hashedPassword, 
+          sanitize(birth_date),
+          sanitize(modeloMoto) // <--- Aqui vai a variável CamelCase
         ]
       );
       res.json({ message: "Sucesso!", userId: result.rows[0].id });
@@ -512,35 +524,47 @@ app.get('/api/me', authenticateToken, async (req, res) => {
 });
 
 // Rota SEGURA para buscar um utilizador específico
-app.get('/api/users/:id', authenticateToken, async (req, res) => {
-  try {
-      // 1. Convertemos os IDs para números para garantir a comparação correta
-      const requestingUserId = parseInt(req.user.id); // ID de quem está logado
-      const targetUserId = parseInt(req.params.id);   // ID que se está a tentar aceder
-      const userRole = req.user.role;                 // Role (admin ou user)
+app.put('/api/users/:id', authenticateToken, async (req, res) => {
+    const { 
+        name, email, phone, rg, medical_insurance, 
+        team, emergency_phone, address, bike_number, 
+        chip_id, role, birth_date, 
+        modeloMoto // <--- Variável CamelCase vinda do React
+    } = req.body;
+    
+    // Segurança para não deixar user virar admin
+    if (req.user.role !== 'admin' && role === 'admin' && req.user.role !== role) {
+         return res.status(403).json({ error: "Operação não permitida." });
+    }
 
-      // 2. TRAVA DE SEGURANÇA (IDOR)
-      // Se não for o dono da conta E não for admin, bloqueia.
-      if (requestingUserId !== targetUserId && userRole !== 'admin') {
-          return res.status(403).json({ error: "Acesso negado. Você não pode ver dados de outro utilizador." });
-      }
-      
-      const result = await query(
-          `SELECT id, name, email, phone, cpf, rg, medical_insurance, 
-                  team, emergency_phone, address, bike_number, chip_id, 
-                  role, birth_date 
-           FROM users WHERE id = $1`, 
-          [req.params.id] 
-      );
-
-      if (result.rows.length === 0) {
-        return res.status(404).json({ error: "Utilizador não encontrado." });
-      }
-
-      res.json(result.rows[0]);
-  } catch (err) { 
-      res.status(500).json({ error: err.message }); 
-  }
+    try {
+        await query(
+            // SQL: Novamente, no banco chamamos de modelo_moto
+            `UPDATE users SET 
+                name = $1, email = $2, phone = $3, rg = $4, medical_insurance = $5, 
+                team = $6, emergency_phone = $7, address = $8, bike_number = $9, 
+                chip_id = $10, role = $11, birth_date = $12, 
+                modelo_moto = $13 
+             WHERE id = $14`, 
+            [
+                name, 
+                email, 
+                phone, 
+                sanitize(rg), 
+                sanitize(medical_insurance), 
+                sanitize(team), 
+                sanitize(emergency_phone), 
+                sanitize(address), 
+                bike_number, 
+                chip_id, 
+                role, 
+                sanitize(birth_date), 
+                sanitize(modeloMoto), // <--- Valor CamelCase
+                req.params.id
+            ]
+        );
+        res.json({ message: "Atualizado!" });
+    } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // --- Rota para ATUALIZAR usuário (Admin ou Próprio) ---
