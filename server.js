@@ -504,8 +504,8 @@ app.delete('/api/stages/:id', authenticateToken, async (req, res) => {
 // Users
 app.get('/api/users', authenticateToken, async (req, res) => {
   try {
-      // Adicionamos: rg, medical_insurance, team, emergency_phone, address
-      const result = await query(`SELECT id, name, email, phone, cpf, rg, medical_insurance, team, emergency_phone, address, bike_number, chip_id, role, birth_date FROM users ORDER BY name ASC`);
+      // ADICIONEI modelo_moto AQUI TAMBÉM
+      const result = await query(`SELECT id, name, email, phone, cpf, rg, medical_insurance, team, emergency_phone, address, bike_number, chip_id, role, birth_date, modelo_moto FROM users ORDER BY name ASC`);
       res.json(result.rows);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -513,7 +513,8 @@ app.get('/api/users', authenticateToken, async (req, res) => {
 app.get('/api/me', authenticateToken, async (req, res) => {
   try {
       const result = await query(
-          `SELECT id, name, email, phone, cpf, bike_number, chip_id, role, birth_date FROM users WHERE id = $1`, 
+          // ADICIONEI modelo_moto AQUI EMBAIXO V
+          `SELECT id, name, email, phone, cpf, bike_number, chip_id, role, birth_date, modelo_moto FROM users WHERE id = $1`, 
           [req.user.id] 
       );
       if (result.rows.length === 0) return res.status(404).json({ error: "Usuário não encontrado." });
@@ -952,7 +953,17 @@ app.delete('/api/categories/:id', authenticateToken, async (req, res) => {
         res.json({ message: "Categoria removida!" });
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
-
+const ensureDbIntegrity = async () => {
+  try {
+    console.log("Verificando integridade do banco...");
+    await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS modelo_moto VARCHAR(255)`);
+    console.log("✅ Coluna 'modelo_moto' verificada/criada com sucesso!");
+  } catch (err) {
+    console.error("❌ Erro ao verificar banco:", err.message);
+  }
+};
+// Executa ao iniciar
+ensureDbIntegrity();
 
 app.listen(port, () => {
   console.log(`Tamura API Rodando na porta ${port}`);
