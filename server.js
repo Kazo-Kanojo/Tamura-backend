@@ -49,10 +49,16 @@ const transporter = nodemailer.createTransport({
 
 const sendEmail = async (to, subject, text) => {
   try {
-    await transporter.sendMail({ from: `"Tamura Eventos" <${process.env.EMAIL_USER}>`, to, subject, text });
+    await transporter.sendMail({ 
+      from: `"Tamura Eventos" <${process.env.EMAIL_USER}>`, 
+      to, 
+      subject, 
+      text 
+    });
     console.log(`Email enviado para ${to}`);
   } catch (error) {
-    console.error("Erro email:", error);
+    console.error("Erro detalhado no nodemailer:", error);
+    throw error
   }
 };
 
