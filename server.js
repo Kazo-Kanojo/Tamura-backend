@@ -37,31 +37,28 @@ const customLookup = (hostname, options, callback) => {
 };
 
 const transporter = nodemailer.createTransport({
-  host: 'smtp.gmail.com',
-  port: 587,
-  secure: false,
+  service: 'gmail', 
   auth: {
     user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS
-  },
-  tls: {
-    rejectUnauthorized: false
-  },
-  lookup: customLookup
+    pass: process.env.EMAIL_PASS 
+  }
 });
 
 const sendEmail = async (to, subject, text) => {
+  const mailOptions = {
+    from: `"Tamura Eventos" <${process.env.EMAIL_USER}>`,
+    to: to,
+    subject: subject,
+    text: text
+  };
+
   try {
-    await transporter.sendMail({ 
-      from: `"Tamura Eventos" <${process.env.EMAIL_USER}>`, 
-      to, 
-      subject, 
-      text 
-    });
-    console.log(`Email enviado para ${to}`);
+    const info = await transporter.sendMail(mailOptions);
+    console.log("Email enviado: " + info.response);
+    return info;
   } catch (error) {
-    console.error("Erro detalhado no nodemailer:", error);
-    throw error
+    console.error("Erro no Nodemailer:", error);
+    throw error;
   }
 };
 
