@@ -412,13 +412,12 @@ app.post('/forgot-password', async (req, res) => {
     };
 
     await sendEmail(mailOptions.to, mailOptions.subject, mailOptions.text);
-
     res.json({ message: "Email enviado com sucesso!" });
 
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Erro ao processar solicitação." });
-  }
+  console.error("Erro na rota de recuperar senha:", err);
+  res.status(500).json({ error: "Erro ao enviar e-mail. Tente novamente mais tarde." });
+}
 });
 
 app.post('/reset-password', async (req, res) => {
