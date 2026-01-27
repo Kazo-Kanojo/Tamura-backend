@@ -994,6 +994,68 @@ const ensureDbIntegrity = async () => {
 // Executa ao iniciar
 ensureDbIntegrity();
 
+// --- ROTA DE INSCRIÇÃO MANUAL ---
+app.post('/api/admin/registrations/manual', authenticateToken, async (req, res) => {
+  if (req.user.role !== 'admin') {
+      return res.status(403).json({ error: "Acesso negado. Apenas administradores." });
+  }
+
+  // Recebendo CPF e Phone também
+  const { stage_id, pilot_name, pilot_number, modelo_moto, categories, total_price, cpf, phone } = req.body;
+
+  if (!pilot_name || !stage_id) {
+      return res.status(400).json({ error: "Nome do piloto e Etapa são obrigatórios." });
+  }
+
+  const client = await pool.connect();
+
+  try {
+      await client.query('BEGIN');
+
+      // 1. Definição dos dados do Usuário (Guest ou Real)
+      const fakeEmail = `guest_${Date.now()}_${Math.floor(Math.random() * 1000)}@tamura.local`;
+      const defaultPassword = await bcrypt.hash('123456', 10);
+      
+      // Se o admin informou CPF, usa ele. Se não, gera um fictício para passar na constraint
+      const userCpf = cpf || `000${Date.now().toString().slice(-8)}`;
+      const userPhone = phone || '';
+
+      // Tenta criar o usuário com esses dados
+      const userRes = await client.query(
+          `INSERT INTO users (name, email, cpf, password, bike_number, role, modelo_moto, phone) 
+           VALUES ($1, $2, $3, $4, $5, 'user', $6, $7) 
+           RETURNING id`,
+          [pilot_name, fakeEmail, userCpf, defaultPassword, pilot_number, modelo_moto, userPhone]
+      );
+      
+      const newUserId = userRes.rows[0].id;
+
+      // 2. Criar a inscrição vinculada
+      const categoriesStr = Array.isArray(categories) ? categories.join(', ') : categories;
+      
+      const regRes = await client.query(
+          `INSERT INTO registrations (user_id, stage_id, pilot_name, pilot_number, plan_name, categories, total_price, status) 
+           VALUES ($1, $2, $3, $4, 'Inscrição Manual', $5, $6, 'paid') 
+           RETURNING id`,
+          [newUserId, stage_id, pilot_name, pilot_number, categoriesStr, total_price]
+      );
+
+      await client.query('COMMIT');
+      res.json({ message: "Piloto inscrito manualmente com sucesso!", id: regRes.rows[0].id });
+
+  } catch (err) {
+      await client.query('ROLLBACK');
+      console.error("Erro na inscrição manual:", err);
+      // Tratamento de erro de duplicidade (CPF já existe)
+      if (err.code === '23505') {
+          return res.status(400).json({ error: "Erro: Este CPF ou E-mail fictício já existe no sistema." });
+      }
+      res.status(500).json({ error: "Erro ao realizar inscrição: " + err.message });
+  } finally {
+      client.release();
+  }
+});
+
 app.listen(port, () => {
   console.log(`Tamura API Rodando na porta ${port}`);
 });
