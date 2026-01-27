@@ -458,17 +458,27 @@ app.get('/api/stages', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// --- ROTA: CRIAR NOVA ETAPA (CORRIGIDA) ---
 app.post('/api/stages', authenticateToken, uploadImage.single('image'), async (req, res) => {
-  const imageUrl = req.file ? req.file.path : null;
+  // Recebe os dados, incluindo o novo map_link
+  const { name, location, date, end_date, map_link } = req.body;
+  
+  // CORREÇÃO: Para Cloudinary usamos req.file.path, não filename
+  const image_url = req.file ? req.file.path : null;
+
   const client = await pool.connect();
   try {
       await client.query('BEGIN');
+      
+      // Inserção atualizada com map_link e image_url correto
       const insertRes = await client.query(
-          `INSERT INTO stages (name, location, date, end_date, image_url, batch_name) VALUES ($1, $2, $3, $4, $5, 'Lote Inicial') RETURNING id`, 
-          [req.body.name, req.body.location, req.body.date, req.body.end_date, imageUrl]
+          `INSERT INTO stages (name, location, date, end_date, image_url, batch_name, map_link) 
+           VALUES ($1, $2, $3, $4, $5, 'Lote Inicial', $6) RETURNING id`, 
+          [name, location, date, end_date, image_url, map_link]
       );
       const newStageId = insertRes.rows[0].id;
 
+      // Cria os preços padrão para a nova etapa
       for (const p of DEFAULT_PLANS) {
           await client.query("INSERT INTO stage_prices (stage_id, plan_id, price) VALUES ($1, $2, $3)", [newStageId, p.id, p.price]);
       }
@@ -484,19 +494,33 @@ app.post('/api/stages', authenticateToken, uploadImage.single('image'), async (r
   }
 });
 
+// --- ROTA: EDITAR ETAPA (CORRIGIDA) ---
 app.put('/api/stages/:id', authenticateToken, uploadImage.single('image'), async (req, res) => {
-    let queryText = `UPDATE stages SET name = $1, location = $2, date = $3, end_date = $4 WHERE id = $5`;
-    let params = [req.body.name, req.body.location, req.body.date, req.body.end_date, req.params.id];
+    const { id } = req.params;
+    const { name, location, date, end_date, map_link } = req.body;
     
-    if (req.file) { 
-        queryText = `UPDATE stages SET name = $1, location = $2, date = $3, end_date = $4, image_url = $5 WHERE id = $6`;
-        params = [req.body.name, req.body.location, req.body.date, req.body.end_date, req.file.path, req.params.id];
-    }
-    
+    // CORREÇÃO: Para Cloudinary usamos req.file.path
+    const image_url = req.file ? req.file.path : null;
+
     try {
-        await query(queryText, params);
-        res.json({ message: "Atualizado!" });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+        if (image_url) {
+            // Se enviou imagem nova, atualiza tudo inclusive a imagem
+            await query(
+                'UPDATE stages SET name=$1, location=$2, date=$3, end_date=$4, map_link=$5, image_url=$6 WHERE id=$7',
+                [name, location, date, end_date, map_link, image_url, id]
+            );
+        } else {
+            // Se NÃO enviou imagem, mantém a antiga e atualiza o resto
+            await query(
+                'UPDATE stages SET name=$1, location=$2, date=$3, end_date=$4, map_link=$5 WHERE id=$6',
+                [name, location, date, end_date, map_link, id]
+            );
+        }
+        res.json({ message: "Etapa atualizada com sucesso!" });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: err.message });
+    }
 });
 
 app.delete('/api/stages/:id', authenticateToken, async (req, res) => {
@@ -1055,6 +1079,41 @@ app.post('/api/admin/registrations/manual', authenticateToken, async (req, res) 
       client.release();
   }
 });
+
+// --- ROTA: DELETAR USUÁRIO (ADMIN) ---
+app.delete('/api/users/:id', authenticateToken, async (req, res) => {
+    // 1. Verifica se é Admin
+    if (req.user.role !== 'admin') {
+        return res.status(403).json({ error: "Acesso negado. Apenas administradores." });
+    }
+
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+
+        // 2. Remove primeiro as inscrições vinculadas a este usuário (evita erro de chave estrangeira)
+        await client.query('DELETE FROM registrations WHERE user_id = $1', [req.params.id]);
+
+        // 3. Agora remove o usuário
+        const result = await client.query('DELETE FROM users WHERE id = $1 RETURNING *', [req.params.id]);
+
+        if (result.rowCount === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ error: "Usuário não encontrado." });
+        }
+
+        await client.query('COMMIT');
+        res.json({ message: "Piloto e seus dados vinculados removidos com sucesso!" });
+
+    } catch (err) {
+        await client.query('ROLLBACK');
+        console.error("Erro ao deletar usuário:", err);
+        res.status(500).json({ error: "Erro ao excluir: " + err.message });
+    } finally {
+        client.release();
+    }
+});
+
 
 app.listen(port, () => {
   console.log(`Tamura API Rodando na porta ${port}`);
