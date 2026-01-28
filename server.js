@@ -497,20 +497,21 @@ app.post('/api/stages', authenticateToken, uploadImage.single('image'), async (r
 // --- ROTA: EDITAR ETAPA (CORRIGIDA) ---
 app.put('/api/stages/:id', authenticateToken, uploadImage.single('image'), async (req, res) => {
     const { id } = req.params;
+    // IMPORTANTE: Adicionado map_link na extração do body
     const { name, location, date, end_date, map_link } = req.body;
     
-    // CORREÇÃO: Para Cloudinary usamos req.file.path
+    // Verifica se houve upload de nova imagem
     const image_url = req.file ? req.file.path : null;
 
     try {
         if (image_url) {
-            // Se enviou imagem nova, atualiza tudo inclusive a imagem
+            // Se enviou imagem nova, atualiza tudo + imagem
             await query(
                 'UPDATE stages SET name=$1, location=$2, date=$3, end_date=$4, map_link=$5, image_url=$6 WHERE id=$7',
                 [name, location, date, end_date, map_link, image_url, id]
             );
         } else {
-            // Se NÃO enviou imagem, mantém a antiga e atualiza o resto
+            // Se NÃO enviou imagem, mantém a antiga e atualiza o resto (incluindo o link do mapa)
             await query(
                 'UPDATE stages SET name=$1, location=$2, date=$3, end_date=$4, map_link=$5 WHERE id=$6',
                 [name, location, date, end_date, map_link, id]
