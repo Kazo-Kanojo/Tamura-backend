@@ -135,10 +135,9 @@ const sanitize = (value) => (value === '' ? null : value);
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false },
-  max: 1, 
+  max: 10, 
   idleTimeoutMillis: 30000,
-  // Aumente o timeout para 10 ou 15 segundos para dar tempo do banco acordar
-  connectionTimeoutMillis: 15000, 
+  connectionTimeoutMillis: 5000, 
 });
 
 const query = (text, params) => pool.query(text, params);
@@ -578,6 +577,33 @@ app.get('/api/me', authenticateToken, async (req, res) => {
   }
 });
 
+// --- ROTA DE ALTA PERFORMANCE PARA O DASHBOARD ---
+app.get('/api/dashboard-data', authenticateToken, async (req, res) => {
+    const userId = req.user.id;
+    
+    try {
+        // Dispara todas as queries simultaneamente no banco de dados
+        const [userRes, stagesRes, regRes, pixRes, batchRes] = await Promise.all([
+            query(`SELECT id, name, email, phone, cpf, rg, medical_insurance, team, emergency_phone, address, bike_number, chip_id, role, birth_date, modelo_moto FROM users WHERE id = $1`, [userId]),
+            query("SELECT * FROM stages ORDER BY date ASC"),
+            query("SELECT * FROM registrations WHERE user_id = $1 ORDER BY created_at DESC", [userId]),
+            query("SELECT value FROM settings WHERE key = 'pix_key'"),
+            query("SELECT value FROM settings WHERE key = 'batch_name'")
+        ]);
+        
+        // Devolve tudo num único pacote JSON
+        res.json({
+            user: userRes.rows[0],
+            stages: stagesRes.rows,
+            registrations: regRes.rows,
+            pix_key: pixRes.rows[0] ? pixRes.rows[0].value : '',
+            batch_name: batchRes.rows[0] ? batchRes.rows[0].value : 'Lote Padrão'
+        });
+    } catch (err) { 
+        console.error("Erro no dashboard-data:", err);
+        res.status(500).json({ error: err.message }); 
+    }
+});
 // --- Rota para ATUALIZAR usuário (Admin ou Próprio) ---
 app.put('/api/users/:id', authenticateToken, async (req, res) => {
     const { 
